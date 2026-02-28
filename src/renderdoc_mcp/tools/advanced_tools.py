@@ -34,7 +34,7 @@ def register(mcp: FastMCP):
         """Batch-sample pixels from a render target and auto-detect anomalies.
 
         Scans for NaN / Inf / negative values and extreme-bright pixels.
-        Best tool for locating the source of screen flashes (爆闪) and IBL negative values.
+        Best tool for locating anomalous color values and IBL / HDR issues.
 
         Args:
             event_id: Sample at this event's render target state. Uses current event if omitted.
@@ -163,7 +163,7 @@ def register(mcp: FastMCP):
         # Build diagnosis hint
         hints: list[str] = []
         if inf_count > 0:
-            hints.append(f"Inf 像素 {inf_count} 个——典型爆闪根源，建议对这些像素执行 pixel_history")
+            hints.append(f"Inf 像素 {inf_count} 个——建议对这些像素执行 pixel_history 追踪来源")
         if neg_count > 0:
             hints.append(f"负值像素 {neg_count} 个——可能来自 IBL SH 采样或 HDR 溢出，建议检查写入该 RT 的 draw call")
         if nan_count > 0:

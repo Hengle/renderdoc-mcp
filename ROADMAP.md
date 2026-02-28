@@ -4,7 +4,7 @@
 >
 > **v0.2.0 更新**: 13 个痛点中已完成 11 个（问题 2-7, 9-13），新增 8 个工具（23→31），详见下方 ✅ 标记。
 >
-> **v0.3.0 更新**: 基于工具设计文档对比补全——新增 11 个工具（31→42），新增 2 个模块（performance_tools, diagnostic_tools），新增 1 个 prompt（diagnose_flash_artifact），多个现有工具增强，详见下方 v0.3 标记。
+> **v0.3.0 更新**: 基于工具设计文档对比补全——新增 11 个工具（31→42），新增 2 个模块（performance_tools, diagnostic_tools），多个现有工具增强，详见下方 v0.3 标记。
 
 ---
 
@@ -402,12 +402,6 @@ find_draws(
 | `diagnose_precision_issues` | diagnostic_tools | 检查 R11G11B10 符号位缺失、浅深度缓冲、SRGB/线性空间不匹配 | **v0.3** |
 | `diagnose_reflection_mismatch` | diagnostic_tools | 对比反射 pass 与主场景 draw，报告 shader/blend/RT 格式差异原因 | **v0.3** |
 | `diagnose_mobile_risks` | diagnostic_tools | 全面检查精度/性能/兼容性/GPU 特定风险，返回排优先级的风险列表 | **v0.3** |
-
-### 新 Prompt
-
-| Prompt | 说明 | 版本 |
-|--------|------|------|
-| `diagnose_flash_artifact` | 逐步诊断屏幕爆闪/时域渲染 artifact，专门针对手机 GPU | **v0.3** |
 
 ---
 

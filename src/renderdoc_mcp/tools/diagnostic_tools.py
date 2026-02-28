@@ -88,7 +88,7 @@ def register(mcp: FastMCP):
         """Scan all float render targets for negative/NaN/Inf pixels and trace their origin.
 
         Automatically identifies which draw calls first introduce negative values,
-        checks if TAA/temporal buffers are amplifying them (indicating flash risk),
+        checks if TAA/temporal buffers are amplifying them,
         and provides root cause candidates with fix suggestions.
 
         Args:
@@ -196,7 +196,7 @@ def register(mcp: FastMCP):
                     ratio = scan["negative_count"] / upstream_neg
                     entry["accumulation_warning"] = (
                         f"⚠️ 负值数 ({scan['negative_count']}) 是上游首次引入值 ({upstream_neg}) 的 {ratio:.1f}x，"
-                        "疑似 TAA/temporal feedback 正在放大负值——持续累积将导致爆闪"
+                        "疑似 TAA/temporal feedback 正在持续放大负值"
                     )
 
             affected.append(entry)
@@ -224,7 +224,7 @@ def register(mcp: FastMCP):
                 if entry.get("accumulation_warning"):
                     candidates.append({
                         "likelihood": "高",
-                        "cause": "Temporal feedback 累积放大负值（爆闪根因）",
+                        "cause": "Temporal feedback 累积放大负值",
                         "evidence": entry["accumulation_warning"],
                         "fix": "检查 temporal weight 和 color clipping 逻辑，确保负值不进入 history buffer",
                     })

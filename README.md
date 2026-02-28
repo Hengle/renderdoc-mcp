@@ -8,7 +8,7 @@ Built on the [Model Context Protocol](https://modelcontextprotocol.io/), works w
 
 - **42 tools** covering the full RenderDoc analysis workflow
 - **10 high-level tools** for one-call analysis (draw call state, frame overview, diff, batch export, pixel region sampling, etc.)
-- **4 built-in prompts** for guided debugging, including mobile GPU flash artifact diagnosis
+- **3 built-in prompts** for guided debugging
 - **Human-readable output** — blend modes, depth functions, topology shown as names not numbers
 - **GPU quirk detection** — auto-identifies Adreno/Mali/PowerVR/Apple-specific pitfalls from driver name
 - **Headless** — no GUI needed, runs entirely via RenderDoc's Python replay API
@@ -253,7 +253,6 @@ Built-in prompt templates to guide AI through common workflows:
 | `debug_draw_call` | Deep-dive a single draw call: pipeline → shaders → cbuffers → outputs |
 | `find_rendering_issue` | Systematic diagnosis from a problem description |
 | `analyze_performance` | Frame-wide perf analysis: pass timing, overdraw, bandwidth, state changes |
-| `diagnose_flash_artifact` | Step-by-step diagnosis for screen flash / temporal artifacts (爆闪) on mobile GPUs |
 
 ## How It Works
 
@@ -278,7 +277,7 @@ python -m pytest tests/ -v
 
 # Project structure
 src/renderdoc_mcp/
-├── server.py                 # FastMCP server, 4 prompt definitions
+├── server.py                 # FastMCP server, 3 prompt definitions
 ├── session.py                # Capture lifecycle, resource/texture caches (singleton)
 ├── util.py                   # Serialization, enum maps, blend formula, module loader
 └── tools/

@@ -109,26 +109,6 @@ def analyze_performance() -> str:
 9. Summarize with actionable optimizations ranked by impact."""
 
 
-@mcp.prompt()
-def diagnose_flash_artifact() -> str:
-    """Diagnose screen flash / temporal artifacts (爆闪) on mobile GPUs."""
-    return """Diagnose screen flash (爆闪) or temporal rendering artifact:
-
-1. `get_capture_info` — check GPU model and known_gpu_quirks (R11G11B10, mediump, etc.)
-2. `diagnose_negative_values` — scan all float RTs for negative/NaN/Inf values.
-   This one call will identify the affected RT, first event that introduced negatives,
-   and whether TAA/temporal is amplifying them.
-3. If negatives found in SceneColor:
-   a. `sample_pixel_region` on the SceneColor RT to locate exact hotspot pixels
-   b. `pixel_history` on a hotspot pixel to trace all draw calls that wrote to it
-   c. `disassemble_shader` with search="SH" or search="ibl" on the culprit event
-   d. `debug_shader_at_pixel` on the hotspot for step-by-step variable trace
-4. If TAA/temporal buffer has negatives > SceneColor negatives:
-   a. `get_cbuffer_contents` on the TAA pass (filter="weight" or "blend" or "feedback")
-   b. `disassemble_shader` on TAA pixel shader with search="history" or search="clamp"
-5. `diagnose_precision_issues` — check R11G11B10 format limitations
-6. Summarize root cause and provide targeted fix."""
-
 
 # ── Cleanup ──
 
