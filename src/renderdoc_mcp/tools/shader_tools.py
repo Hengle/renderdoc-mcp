@@ -68,7 +68,10 @@ def register(mcp: FastMCP):
         if refl is None:
             return to_json(make_error(f"No shader bound at stage '{stage}'", "API_ERROR"))
 
-        pipe = state.GetGraphicsPipelineObject()
+        if stage_enum == rd.ShaderStage.Compute:
+            pipe = state.GetComputePipelineObject()
+        else:
+            pipe = state.GetGraphicsPipelineObject()
         targets = session.controller.GetDisassemblyTargets(True)
 
         if not targets:
@@ -231,7 +234,10 @@ def register(mcp: FastMCP):
                 "API_ERROR",
             ))
 
-        pipe = state.GetGraphicsPipelineObject()
+        if stage_enum == rd.ShaderStage.Compute:
+            pipe = state.GetComputePipelineObject()
+        else:
+            pipe = state.GetGraphicsPipelineObject()
         entry = state.GetShaderEntryPoint(stage_enum)
         cb_bind = state.GetConstantBlock(stage_enum, cbuffer_index, 0)
 
