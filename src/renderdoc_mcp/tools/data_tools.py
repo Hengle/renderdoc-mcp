@@ -53,7 +53,7 @@ def register(mcp: FastMCP):
             return to_json(make_error(f"Unknown file type: {file_type}. Valid: {list(FILE_TYPE_MAP.keys())}", "API_ERROR"))
 
         output_path = os.path.normpath(output_path)
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
         texsave = rd.TextureSave()
         texsave.resourceId = tex_id
@@ -335,7 +335,7 @@ def register(mcp: FastMCP):
             color_path = os.path.join(output_path, fname)
         else:
             color_path = output_path
-            os.makedirs(os.path.dirname(color_path), exist_ok=True)
+            os.makedirs(os.path.dirname(color_path) or ".", exist_ok=True)
 
         texsave = rd.TextureSave()
         texsave.resourceId = color_target.resource
