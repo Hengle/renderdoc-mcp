@@ -51,10 +51,31 @@ def register(mcp: FastMCP):
 
         results = []
         for mod in history:
+            passed = mod.Passed()
             entry: dict = {
                 "event_id": mod.eventId,
-                "passed": mod.Passed(),
+                "passed": passed,
             }
+            # Add failure reasons when the modification did not pass
+            if not passed:
+                failure_reasons = []
+                try:
+                    if mod.backfaceCulled:
+                        failure_reasons.append("backface_culled")
+                    if mod.depthTestFailed:
+                        failure_reasons.append("depth_test_failed")
+                    if mod.stencilTestFailed:
+                        failure_reasons.append("stencil_test_failed")
+                    if mod.scissorClipped:
+                        failure_reasons.append("scissor_clipped")
+                    if mod.shaderDiscarded:
+                        failure_reasons.append("shader_discarded")
+                    if mod.depthClipped:
+                        failure_reasons.append("depth_clipped")
+                except Exception:
+                    pass
+                if failure_reasons:
+                    entry["failure_reasons"] = failure_reasons
             # Pre-modification value
             pre = mod.preMod
             entry["pre_value"] = {
