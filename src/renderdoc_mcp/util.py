@@ -95,6 +95,51 @@ TOPOLOGY_MAP: dict[int, str] = {
     11: "PatchList",
 }
 
+VAR_TYPE_MAP: dict[int, str] = {
+    0: "Float", 1: "Double", 2: "Half",
+    3: "SInt", 4: "UInt", 5: "SShort", 6: "UShort",
+    7: "SLong", 8: "ULong", 9: "SByte", 10: "UByte",
+    11: "Bool", 12: "Enum", 13: "GPUPointer",
+    14: "ConstantBlock", 15: "Struct", 16: "Unknown",
+}
+
+SYSTEM_VALUE_MAP: dict[int, str] = {
+    0: "None", 1: "Position", 2: "ClipDistance", 3: "CullDistance",
+    4: "RTIndex", 5: "ViewportIndex", 6: "VertexIndex", 7: "PrimitiveIndex",
+    8: "InstanceIndex", 9: "DispatchThreadIndex", 10: "GroupIndex",
+    11: "GroupFlatIndex", 12: "GroupThreadIndex", 13: "GSInstanceIndex",
+    14: "OutputControlPointIndex", 15: "DomainLocation",
+    16: "IsFrontFace", 17: "MSAACoverage", 18: "MSAASamplePosition",
+    19: "MSAASampleIndex", 20: "PatchNumVertices",
+    21: "OuterTessFactor", 22: "InsideTessFactor",
+    23: "ColourOutput", 24: "DepthOutput", 25: "DepthOutputGreaterEqual",
+    26: "DepthOutputLessEqual",
+}
+
+TEXTURE_DIM_MAP: dict[int, str] = {
+    0: "Unknown", 1: "Buffer", 2: "Texture1D", 3: "Texture1DArray",
+    4: "Texture2D", 5: "Texture2DArray", 6: "Texture2DMS", 7: "Texture2DMSArray",
+    8: "Texture3D", 9: "TextureCube", 10: "TextureCubeArray",
+}
+
+RESOURCE_USAGE_MAP: dict[int, str] = {
+    0: "None", 1: "VertexBuffer", 2: "IndexBuffer",
+    3: "VS_Constants", 4: "HS_Constants", 5: "DS_Constants",
+    6: "GS_Constants", 7: "PS_Constants", 8: "CS_Constants",
+    9: "All_Constants",
+    10: "StreamOut", 11: "IndirectArg",
+    16: "VS_Resource", 17: "HS_Resource", 18: "DS_Resource",
+    19: "GS_Resource", 20: "PS_Resource", 21: "CS_Resource",
+    22: "All_Resource",
+    32: "VS_RWResource", 33: "HS_RWResource", 34: "DS_RWResource",
+    35: "GS_RWResource", 36: "PS_RWResource", 37: "CS_RWResource",
+    38: "All_RWResource",
+    48: "InputTarget", 49: "ColorTarget", 50: "DepthStencilTarget",
+    64: "Clear", 65: "GenMips", 66: "Resolve", 67: "ResolveSrc",
+    68: "ResolveDst", 69: "Copy", 70: "CopySrc", 71: "CopyDst",
+    72: "Barrier",
+}
+
 
 def enum_str(value, mapping: dict, fallback_prefix: str = "") -> str:
     """Convert an enum value to a readable string, falling back to str()."""
@@ -268,7 +313,7 @@ def serialize_texture_desc(tex) -> dict:
         "array_size": tex.arraysize,
         "mips": tex.mips,
         "format": str(tex.format.Name()),
-        "dimension": tex.dimension,
+        "dimension": enum_str(tex.dimension, TEXTURE_DIM_MAP, "Dim."),
         "msqual": tex.msQual,
         "mssamp": tex.msSamp,
         "creation_flags": tex.creationFlags,
@@ -351,7 +396,7 @@ def serialize_usage_entry(usage) -> dict:
     """Serialize a single EventUsage entry."""
     return {
         "event_id": usage.eventId,
-        "usage": str(usage.usage),
+        "usage": enum_str(usage.usage, RESOURCE_USAGE_MAP, "Usage."),
     }
 
 
@@ -362,9 +407,9 @@ def serialize_sig_element(sig) -> dict:
         "semantic_name": sig.semanticName,
         "semantic_index": sig.semanticIndex,
         "semantic_idx_name": sig.semanticIdxName,
-        "var_type": str(sig.varType),
+        "var_type": enum_str(sig.varType, VAR_TYPE_MAP, "VarType."),
         "comp_count": sig.compCount,
-        "system_value": str(sig.systemValue),
+        "system_value": enum_str(sig.systemValue, SYSTEM_VALUE_MAP, "SysValue."),
         "reg_index": sig.regIndex,
     }
 
