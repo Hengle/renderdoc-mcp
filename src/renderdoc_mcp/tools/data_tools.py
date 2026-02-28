@@ -28,6 +28,7 @@ def register(mcp: FastMCP):
         output_path: str,
         file_type: str = "png",
         mip: int = 0,
+        event_id: Optional[int] = None,
     ) -> str:
         """Save a texture resource to an image file.
 
@@ -36,13 +37,15 @@ def register(mcp: FastMCP):
             output_path: Absolute path for the output file.
             file_type: Output format: png, jpg, bmp, tga, hdr, exr, dds (default: png).
             mip: Mip level to save (default 0). Use -1 for all mips (DDS only).
+            event_id: Optional event ID to navigate to first.
         """
         session = get_session()
         err = session.require_open()
         if err:
             return to_json(err)
-        if session.current_event is None:
-            return to_json(make_error("No event selected. Use set_event first.", "INVALID_EVENT_ID"))
+        err = session.ensure_event(event_id)
+        if err:
+            return to_json(err)
 
         tex_id = session.resolve_resource_id(resource_id)
         if tex_id is None:

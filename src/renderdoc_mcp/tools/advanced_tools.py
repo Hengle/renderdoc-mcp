@@ -23,6 +23,7 @@ def register(mcp: FastMCP):
         resource_id: str,
         x: int,
         y: int,
+        event_id: Optional[int] = None,
     ) -> str:
         """Get the full modification history of a pixel across all events in the frame.
 
@@ -33,13 +34,15 @@ def register(mcp: FastMCP):
             resource_id: The texture resource ID (must be a render target).
             x: X coordinate of the pixel.
             y: Y coordinate of the pixel.
+            event_id: Optional event ID to navigate to first.
         """
         session = get_session()
         err = session.require_open()
         if err:
             return to_json(err)
-        if session.current_event is None:
-            return to_json(make_error("No event selected. Use set_event first.", "INVALID_EVENT_ID"))
+        err = session.ensure_event(event_id)
+        if err:
+            return to_json(err)
 
         tex_id = session.resolve_resource_id(resource_id)
         if tex_id is None:
