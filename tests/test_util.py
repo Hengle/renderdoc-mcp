@@ -158,15 +158,19 @@ class TestSerializeAction(unittest.TestCase):
 
 
 class TestSerializeShaderVariable(unittest.TestCase):
-    def _make_var(self, name="testVar", rows=1, columns=4, values=None, members=None):
+    def _make_var(self, name="testVar", rows=1, columns=4, values=None, members=None, var_type=0):
         var = MagicMock()
         var.name = name
         var.rows = rows
         var.columns = columns
+        var.type = var_type  # 0=Float by default
         var.members = members or []
         if values is None:
             values = [1.0, 2.0, 3.0, 4.0]
         var.value.f32v = values
+        var.value.s32v = [int(v) for v in values]
+        var.value.u32v = [int(v) for v in values]
+        var.value.f64v = [float(v) for v in values]
         return var
 
     def test_leaf_variable(self):

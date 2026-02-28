@@ -294,16 +294,44 @@ def serialize_resource_desc(res) -> dict:
     }
 
 
+def _get_var_type_accessor(var) -> tuple[str, str]:
+    """Determine the correct value accessor and type name for a ShaderVariable.
+
+    Returns (accessor_attr, type_name) based on var.type.
+    """
+    try:
+        var_type = int(var.type)
+    except Exception:
+        return "f32v", "float"
+
+    # RenderDoc VarType enum values:
+    # Float=0, Double=1, Half=2, SInt=3, UInt=4, SShort=5, UShort=6,
+    # SLong=7, ULong=8, SByte=9, UByte=10, Bool=11, Enum=12,
+    # GPUPointer=13, ConstantBlock=14, Struct=15, Unknown=16
+    if var_type == 1:  # Double
+        return "f64v", "double"
+    elif var_type in (3, 5, 7, 9):  # SInt, SShort, SLong, SByte
+        return "s32v", "int"
+    elif var_type in (4, 6, 8, 10):  # UInt, UShort, ULong, UByte
+        return "u32v", "uint"
+    elif var_type == 11:  # Bool
+        return "u32v", "bool"
+    else:  # Float, Half, and all others default to float
+        return "f32v", "float"
+
+
 def serialize_shader_variable(var, max_depth: int = 10, depth: int = 0) -> dict:
     """Recursively serialize a ShaderVariable to a dict."""
     result: dict[str, Any] = {"name": var.name}
     if len(var.members) == 0:
-        # Leaf variable - extract values
+        # Leaf variable - extract values using correct type accessor
+        accessor, type_name = _get_var_type_accessor(var)
+        result["type"] = type_name
         values = []
         for r in range(var.rows):
             row_vals = []
             for c in range(var.columns):
-                row_vals.append(var.value.f32v[r * var.columns + c])
+                row_vals.append(getattr(var.value, accessor)[r * var.columns + c])
             values.append(row_vals)
         # Flatten single-row results
         if len(values) == 1:
