@@ -18,6 +18,8 @@ class RenderDocSession:
         self._current_event: int | None = None
         self._action_map: dict[int, object] = {}
         self._structured_file = None
+        self._resource_id_cache: dict[str, object] = {}  # str(resourceId) → resourceId
+        self._texture_desc_cache: dict[str, object] = {}  # str(resourceId) → TextureDescription
 
     def _ensure_initialized(self):
         """Initialize the replay system if not already done."""
@@ -87,10 +89,25 @@ class RenderDocSession:
         self._action_map = {}
         self._build_action_map(controller.GetRootActions())
 
-        # Gather summary
-        root_actions = controller.GetRootActions()
+        # Build resource caches
+        self._resource_id_cache = {}
+        self._texture_desc_cache = {}
         textures = controller.GetTextures()
         buffers = controller.GetBuffers()
+        for tex in textures:
+            key = str(tex.resourceId)
+            self._resource_id_cache[key] = tex.resourceId
+            self._texture_desc_cache[key] = tex
+        for buf in buffers:
+            key = str(buf.resourceId)
+            self._resource_id_cache[key] = buf.resourceId
+        for res in controller.GetResources():
+            key = str(res.resourceId)
+            if key not in self._resource_id_cache:
+                self._resource_id_cache[key] = res.resourceId
+
+        # Gather summary
+        root_actions = controller.GetRootActions()
 
         return {
             "filepath": filepath,
@@ -108,6 +125,14 @@ class RenderDocSession:
             if len(a.children) > 0:
                 self._build_action_map(a.children)
 
+    def resolve_resource_id(self, resource_id_str: str):
+        """Resolve a resource ID string to a ResourceId object, or None."""
+        return self._resource_id_cache.get(resource_id_str)
+
+    def get_texture_desc(self, resource_id_str: str):
+        """Get a TextureDescription by resource ID string, or None."""
+        return self._texture_desc_cache.get(resource_id_str)
+
     def close(self) -> dict:
         """Close the current capture."""
         if not self.is_open:
@@ -122,6 +147,8 @@ class RenderDocSession:
         self._current_event = None
         self._action_map = {}
         self._structured_file = None
+        self._resource_id_cache = {}
+        self._texture_desc_cache = {}
         return {"status": "closed", "filepath": filepath}
 
     def set_event(self, event_id: int) -> dict | None:

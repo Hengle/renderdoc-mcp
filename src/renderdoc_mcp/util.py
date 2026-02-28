@@ -58,6 +58,94 @@ MESH_DATA_STAGE_MAP: dict[str, Any] = {
     "gsout": rd.MeshDataStage.GSOut,
 }
 
+# ── Enum readable-name mappings ──
+
+BLEND_FACTOR_MAP: dict[int, str] = {
+    0: "Zero", 1: "One", 2: "SrcColor", 3: "InvSrcColor",
+    4: "DstColor", 5: "InvDstColor", 6: "SrcAlpha", 7: "InvSrcAlpha",
+    8: "DstAlpha", 9: "InvDstAlpha", 10: "SrcAlphaSat",
+    11: "BlendFactor", 12: "InvBlendFactor",
+    13: "Src1Color", 14: "InvSrc1Color", 15: "Src1Alpha", 16: "InvSrc1Alpha",
+}
+
+BLEND_OP_MAP: dict[int, str] = {
+    0: "Add", 1: "Subtract", 2: "RevSubtract", 3: "Min", 4: "Max",
+}
+
+COMPARE_FUNC_MAP: dict[int, str] = {
+    0: "AlwaysFalse", 1: "Never", 2: "Less", 3: "LessEqual",
+    4: "Greater", 5: "GreaterEqual", 6: "Equal", 7: "NotEqual", 8: "Always",
+}
+
+STENCIL_OP_MAP: dict[int, str] = {
+    0: "Keep", 1: "Zero", 2: "Replace", 3: "IncrSat",
+    4: "DecrSat", 5: "Invert", 6: "IncrWrap", 7: "DecrWrap",
+}
+
+CULL_MODE_MAP: dict[int, str] = {0: "None", 1: "Front", 2: "Back", 3: "FrontAndBack"}
+
+FILL_MODE_MAP: dict[int, str] = {0: "Solid", 1: "Wireframe", 2: "Point"}
+
+TOPOLOGY_MAP: dict[int, str] = {
+    0: "Unknown",
+    1: "PointList", 2: "LineList", 3: "LineStrip",
+    4: "TriangleList", 5: "TriangleStrip", 6: "TriangleFan",
+    7: "LineList_Adj", 8: "LineStrip_Adj",
+    9: "TriangleList_Adj", 10: "TriangleStrip_Adj",
+    11: "PatchList",
+}
+
+
+def enum_str(value, mapping: dict, fallback_prefix: str = "") -> str:
+    """Convert an enum value to a readable string, falling back to str()."""
+    try:
+        int_val = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return mapping.get(int_val, f"{fallback_prefix}{value}")
+
+
+def blend_formula(color_src: str, color_dst: str, color_op: str,
+                  alpha_src: str, alpha_dst: str, alpha_op: str) -> str:
+    """Generate a human-readable blend formula string."""
+    def _op_str(op: str, a: str, b: str) -> str:
+        if op == "Add":
+            return f"{a} + {b}"
+        elif op == "Subtract":
+            return f"{a} - {b}"
+        elif op == "RevSubtract":
+            return f"{b} - {a}"
+        elif op == "Min":
+            return f"min({a}, {b})"
+        elif op == "Max":
+            return f"max({a}, {b})"
+        return f"{a} {op} {b}"
+
+    def _factor(f: str, channel: str) -> str:
+        src, dst = f"src.{channel}", f"dst.{channel}"
+        factor_map = {
+            "Zero": "0", "One": "1",
+            "SrcColor": "src.rgb", "InvSrcColor": "(1-src.rgb)",
+            "DstColor": "dst.rgb", "InvDstColor": "(1-dst.rgb)",
+            "SrcAlpha": "src.a", "InvSrcAlpha": "(1-src.a)",
+            "DstAlpha": "dst.a", "InvDstAlpha": "(1-dst.a)",
+            "SrcAlphaSat": "sat(src.a)",
+            "BlendFactor": "factor", "InvBlendFactor": "(1-factor)",
+            "Src1Color": "src1.rgb", "InvSrc1Color": "(1-src1.rgb)",
+            "Src1Alpha": "src1.a", "InvSrc1Alpha": "(1-src1.a)",
+        }
+        return factor_map.get(f, f)
+
+    c_src = _factor(color_src, "rgb")
+    c_dst = _factor(color_dst, "rgb")
+    color_expr = _op_str(color_op, f"{c_src}*src.rgb", f"{c_dst}*dst.rgb")
+
+    a_src = _factor(alpha_src, "a")
+    a_dst = _factor(alpha_dst, "a")
+    alpha_expr = _op_str(alpha_op, f"{a_src}*src.a", f"{a_dst}*dst.a")
+
+    return f"color: {color_expr} | alpha: {alpha_expr}"
+
 
 # ── Error helpers ──
 

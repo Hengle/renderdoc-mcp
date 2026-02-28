@@ -6,8 +6,10 @@ Built on the [Model Context Protocol](https://modelcontextprotocol.io/), works w
 
 ## Features
 
-- **19 tools** covering the full RenderDoc analysis workflow
+- **31 tools** covering the full RenderDoc analysis workflow
+- **8 high-level tools** for one-call analysis (draw call state, frame overview, diff, batch export, etc.)
 - **3 built-in prompts** for guided debugging
+- **Human-readable output** — blend modes, depth functions, topology shown as names not numbers
 - **Headless** — no GUI needed, runs entirely via RenderDoc's Python replay API
 - **Pure Python** — single `pip install`, no build step
 - Supports D3D11, D3D12, OpenGL, Vulkan captures
@@ -113,28 +115,41 @@ Once configured, just talk to your AI assistant:
 ### Typical Tool Flow
 
 ```
-open_capture("frame.rdc")           # Load the capture
-├── list_actions()                   # See the frame structure
-├── set_event(142)                   # Navigate to a draw call
-│   ├── get_pipeline_state()         # Inspect rasterizer/blend/depth
-│   ├── get_shader_bindings("pixel") # Check what textures/buffers are bound
-│   ├── get_cbuffer_contents("pixel", 0)  # Read shader constants
-│   └── save_texture(id, "rt.png")   # Export render target
-├── pixel_history(id, 512, 384)      # Debug a specific pixel
-└── close_capture()                  # Clean up
+open_capture("frame.rdc")                  # Load the capture
+├── get_frame_overview()                    # Frame-level stats and render passes
+├── get_draw_call_state(142)                # Complete draw call state in one call
+├── diff_draw_calls(140, 142)               # Compare two draw calls
+├── export_draw_textures(142, "./tex/")     # Batch export all bound textures
+├── save_render_target(142, "./rt.png")     # Save render target snapshot
+├── analyze_render_passes()                 # Auto-detect render pass boundaries
+├── find_draws(blend=True, min_vertices=1000) # Search by rendering state
+├── pixel_history(id, 512, 384)             # Debug a specific pixel
+├── export_mesh(142, "./mesh.obj")          # Export mesh as OBJ
+└── close_capture()                         # Clean up
+```
+
+For lower-level inspection, all granular tools remain available:
+
+```
+set_event(142)                       # Navigate to a draw call
+├── get_pipeline_state()             # Inspect rasterizer/blend/depth
+├── get_shader_bindings("pixel")     # Check what textures/buffers are bound
+├── get_cbuffer_contents("pixel", 0) # Read shader constants
+└── save_texture(id, "rt.png")       # Export a specific texture
 ```
 
 ## Tools
 
-### Session Management
+### Session Management (4)
 
 | Tool | Description |
 |------|-------------|
 | `open_capture` | Open a `.rdc` file (auto-closes previous) |
 | `close_capture` | Close current capture and free resources |
 | `get_capture_info` | Capture metadata: API, action count, resource counts |
+| `get_frame_overview` | **Frame-level statistics**: action counts by type, texture/buffer memory, render targets, resolution |
 
-### Event Navigation
+### Event Navigation (5)
 
 | Tool | Description |
 |------|-------------|
@@ -142,16 +157,18 @@ open_capture("frame.rdc")           # Load the capture
 | `get_action` | Full detail for a single action |
 | `set_event` | Navigate to an event (**required** before pipeline queries) |
 | `search_actions` | Search by name pattern and/or action flags |
+| `find_draws` | **Search draw calls by rendering state**: blend, min vertices, texture/shader/RT binding |
 
-### Pipeline Inspection
+### Pipeline Inspection (4)
 
 | Tool | Description |
 |------|-------------|
-| `get_pipeline_state` | Full state: topology, viewports, rasterizer, blend, depth, stencil |
+| `get_pipeline_state` | Full state: topology, viewports, rasterizer, blend, depth, stencil (human-readable enums) |
 | `get_shader_bindings` | Constant buffers, SRVs, UAVs, samplers for a shader stage |
 | `get_vertex_inputs` | Vertex attributes, vertex/index buffer bindings |
+| `get_draw_call_state` | **One-call draw analysis**: action info, blend formula, depth, stencil, rasterizer, textures with sizes, RTs, shaders |
 
-### Resource Analysis
+### Resource Analysis (4)
 
 | Tool | Description |
 |------|-------------|
@@ -160,7 +177,7 @@ open_capture("frame.rdc")           # Load the capture
 | `list_resources` | All named resources (filterable by type, name pattern) |
 | `get_resource_usage` | Which events read/write a resource |
 
-### Data Extraction
+### Data Extraction (7)
 
 | Tool | Description |
 |------|-------------|
@@ -168,21 +185,26 @@ open_capture("frame.rdc")           # Load the capture
 | `get_buffer_data` | Read buffer bytes (hex dump or float32 array) |
 | `pick_pixel` | RGBA value at a coordinate |
 | `get_texture_stats` | Per-channel min/max |
+| `export_draw_textures` | **Batch export** all textures bound to a draw call (auto-names, skips placeholders) |
+| `save_render_target` | **Save RT snapshot** at an event (color + optional depth) |
+| `export_mesh` | **Export mesh as OBJ** with positions, normals, UVs from post-VS data |
 
-### Shader Analysis
+### Shader Analysis (3)
 
 | Tool | Description |
 |------|-------------|
-| `disassemble_shader` | Shader disassembly (DXBC, DXIL, SPIR-V, etc.) |
+| `disassemble_shader` | Shader disassembly with **auto fallback chain** (tries all targets, falls back to reflection) |
 | `get_shader_reflection` | Input/output signatures, resource binding layout |
 | `get_cbuffer_contents` | Actual constant buffer variable values |
 
-### Advanced
+### Advanced (4)
 
 | Tool | Description |
 |------|-------------|
 | `pixel_history` | Full per-pixel modification history across all events |
 | `get_post_vs_data` | Post-transform vertex data (VS out / GS out) |
+| `diff_draw_calls` | **Compare two draw calls** — shows only state differences |
+| `analyze_render_passes` | **Auto-detect render pass boundaries** by Clear/RT switches, summarize each pass |
 
 ## Prompts
 
@@ -218,16 +240,16 @@ python -m pytest tests/ -v
 # Project structure
 src/renderdoc_mcp/
 ├── server.py              # FastMCP server, prompt definitions
-├── session.py             # Capture lifecycle management (singleton)
-├── util.py                # Serialization, enum maps, module loader
+├── session.py             # Capture lifecycle, resource caches (singleton)
+├── util.py                # Serialization, enum maps, blend formula, module loader
 └── tools/
-    ├── session_tools.py   # open/close/info
-    ├── event_tools.py     # list/get/set/search actions
-    ├── pipeline_tools.py  # pipeline state, shader bindings, vertex inputs
+    ├── session_tools.py   # open/close/info + get_frame_overview
+    ├── event_tools.py     # list/get/set/search actions + find_draws
+    ├── pipeline_tools.py  # pipeline state, shader bindings, vertex inputs + get_draw_call_state
     ├── resource_tools.py  # texture/buffer/resource enumeration
-    ├── data_tools.py      # texture save, buffer read, pixel pick
-    ├── shader_tools.py    # disassembly, reflection, cbuffer contents
-    └── advanced_tools.py  # pixel history, post-VS data
+    ├── data_tools.py      # texture save, buffer read, pixel pick + export_draw_textures, save_render_target, export_mesh
+    ├── shader_tools.py    # disassembly (with fallback chain), reflection, cbuffer contents
+    └── advanced_tools.py  # pixel history, post-VS data + diff_draw_calls, analyze_render_passes
 ```
 
 ## License

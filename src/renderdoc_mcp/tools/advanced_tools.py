@@ -1,4 +1,4 @@
-"""Advanced tools: pixel_history, get_post_vs_data."""
+"""Advanced tools: pixel_history, get_post_vs_data, diff_draw_calls, analyze_render_passes."""
 
 from __future__ import annotations
 
@@ -12,16 +12,9 @@ from renderdoc_mcp.util import (
     rd,
     to_json,
     make_error,
+    flags_to_list,
     MESH_DATA_STAGE_MAP,
 )
-
-
-def _find_texture_id(resource_id_str: str):
-    controller = get_session().controller
-    for tex in controller.GetTextures():
-        if str(tex.resourceId) == resource_id_str:
-            return tex.resourceId
-    return None
 
 
 def register(mcp: FastMCP):
@@ -48,7 +41,7 @@ def register(mcp: FastMCP):
         if session.current_event is None:
             return to_json(make_error("No event selected. Use set_event first.", "INVALID_EVENT_ID"))
 
-        tex_id = _find_texture_id(resource_id)
+        tex_id = session.resolve_resource_id(resource_id)
         if tex_id is None:
             return to_json(make_error(f"Texture resource '{resource_id}' not found", "INVALID_RESOURCE_ID"))
 
@@ -60,7 +53,7 @@ def register(mcp: FastMCP):
         for mod in history:
             entry: dict = {
                 "event_id": mod.eventId,
-                "passed": not mod.Passed(),
+                "passed": mod.Passed(),
             }
             # Pre-modification value
             pre = mod.preMod
@@ -183,3 +176,156 @@ def register(mcp: FastMCP):
             "returned_vertices": len(vertices),
             "vertices": vertices,
         })
+
+    @mcp.tool()
+    def diff_draw_calls(eid1: int, eid2: int) -> str:
+        """Compare two draw calls and return their state differences.
+
+        Useful for understanding what changed between two similar draw calls.
+
+        Args:
+            eid1: Event ID of the first draw call.
+            eid2: Event ID of the second draw call.
+        """
+        from renderdoc_mcp.tools.pipeline_tools import _get_draw_state_dict
+
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        state1 = _get_draw_state_dict(session, eid1)
+        if "error" in state1:
+            return to_json(state1)
+
+        state2 = _get_draw_state_dict(session, eid2)
+        if "error" in state2:
+            return to_json(state2)
+
+        diff = _diff_dicts(state1, state2)
+
+        return to_json({
+            "eid1": eid1,
+            "eid2": eid2,
+            "differences": diff,
+            "identical": len(diff) == 0,
+        })
+
+    @mcp.tool()
+    def analyze_render_passes() -> str:
+        """Auto-detect render pass boundaries and summarize each pass.
+
+        Detects passes by Clear actions and output target changes.
+        Returns a list of render passes with draw count, RT info, and event range.
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        sf = session.structured_file
+        passes: list[dict] = []
+        current_pass: dict | None = None
+        last_outputs: tuple | None = None
+
+        for eid in sorted(session._action_map.keys()):
+            action = session._action_map[eid]
+            is_clear = bool(action.flags & rd.ActionFlags.Clear)
+            is_draw = bool(action.flags & rd.ActionFlags.Drawcall)
+
+            if not is_clear and not is_draw:
+                continue
+
+            # Determine current outputs
+            outputs = tuple(str(o) for o in action.outputs if int(o) != 0)
+
+            # Detect pass boundary: clear or output target change
+            new_pass = False
+            if is_clear:
+                new_pass = True
+            elif outputs and outputs != last_outputs:
+                new_pass = True
+
+            if new_pass and (is_clear or current_pass is None):
+                # Start a new pass
+                if current_pass is not None:
+                    passes.append(current_pass)
+                current_pass = {
+                    "pass_index": len(passes),
+                    "start_event": eid,
+                    "end_event": eid,
+                    "start_action": action.GetName(sf),
+                    "draw_count": 0,
+                    "clear_count": 0,
+                    "render_targets": list(outputs) if outputs else [],
+                }
+
+            if current_pass is None:
+                current_pass = {
+                    "pass_index": 0,
+                    "start_event": eid,
+                    "end_event": eid,
+                    "start_action": action.GetName(sf),
+                    "draw_count": 0,
+                    "clear_count": 0,
+                    "render_targets": list(outputs) if outputs else [],
+                }
+
+            current_pass["end_event"] = eid
+            if is_draw:
+                current_pass["draw_count"] += 1
+            if is_clear:
+                current_pass["clear_count"] += 1
+
+            if outputs:
+                last_outputs = outputs
+                # Update RT info if changed within pass
+                for o in outputs:
+                    if o not in current_pass["render_targets"]:
+                        current_pass["render_targets"].append(o)
+
+        if current_pass is not None:
+            passes.append(current_pass)
+
+        # Enrich with RT size info
+        for p in passes:
+            rt_info = []
+            for rid_str in p["render_targets"]:
+                entry: dict = {"resource_id": rid_str}
+                tex_desc = session.get_texture_desc(rid_str)
+                if tex_desc is not None:
+                    entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
+                    entry["format"] = str(tex_desc.format.Name())
+                rt_info.append(entry)
+            p["render_target_info"] = rt_info
+
+        return to_json({
+            "passes": passes,
+            "total_passes": len(passes),
+        })
+
+
+def _diff_dicts(d1: dict, d2: dict, path: str = "") -> dict:
+    """Recursively diff two dicts, returning only differing keys."""
+    diff: dict = {}
+    all_keys = set(d1.keys()) | set(d2.keys())
+
+    for key in all_keys:
+        key_path = f"{path}.{key}" if path else key
+        v1 = d1.get(key)
+        v2 = d2.get(key)
+
+        if v1 == v2:
+            continue
+
+        if isinstance(v1, dict) and isinstance(v2, dict):
+            sub = _diff_dicts(v1, v2, key_path)
+            if sub:
+                diff[key] = sub
+        elif isinstance(v1, list) and isinstance(v2, list):
+            if v1 != v2:
+                diff[key] = {"eid1": v1, "eid2": v2}
+        else:
+            diff[key] = {"eid1": v1, "eid2": v2}
+
+    return diff

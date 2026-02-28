@@ -1,4 +1,4 @@
-"""Session management tools: open_capture, close_capture, get_capture_info."""
+"""Session management tools: open_capture, close_capture, get_capture_info, get_frame_overview."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from renderdoc_mcp.session import get_session
-from renderdoc_mcp.util import to_json
+from renderdoc_mcp.util import rd, to_json, make_error, flags_to_list
 
 
 def register(mcp: FastMCP):
@@ -55,3 +55,112 @@ def register(mcp: FastMCP):
             "current_event": session.current_event,
         }
         return to_json(info)
+
+    @mcp.tool()
+    def get_frame_overview() -> str:
+        """Get a frame-level statistics overview of the current capture.
+
+        Returns action counts by type, texture/buffer memory totals,
+        main render targets with draw counts, and estimated resolution.
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        controller = session.controller
+
+        # Count actions by type
+        draw_calls = 0
+        clears = 0
+        dispatches = 0
+        for _eid, action in session._action_map.items():
+            if action.flags & rd.ActionFlags.Drawcall:
+                draw_calls += 1
+            if action.flags & rd.ActionFlags.Clear:
+                clears += 1
+            if action.flags & rd.ActionFlags.Dispatch:
+                dispatches += 1
+
+        # Texture memory
+        textures = controller.GetTextures()
+        tex_total_bytes = 0
+        for tex in textures:
+            # Estimate: width * height * depth * arraysize * bpp (assume 4 bytes as fallback)
+            bpp = 4
+            fmt_name = str(tex.format.Name()).upper()
+            if "R16G16B16A16" in fmt_name:
+                bpp = 8
+            elif "R32G32B32A32" in fmt_name:
+                bpp = 16
+            elif "R8G8B8A8" in fmt_name or "B8G8R8A8" in fmt_name:
+                bpp = 4
+            elif "R16G16" in fmt_name:
+                bpp = 4
+            elif "R32" in fmt_name and "G32" not in fmt_name:
+                bpp = 4
+            elif "R16" in fmt_name and "G16" not in fmt_name:
+                bpp = 2
+            elif "R8" in fmt_name and "G8" not in fmt_name:
+                bpp = 1
+            elif "BC" in fmt_name or "ETC" in fmt_name or "ASTC" in fmt_name:
+                bpp = 1  # compressed: ~1 byte per pixel average
+            elif "D24" in fmt_name or "D32" in fmt_name:
+                bpp = 4
+            elif "D16" in fmt_name:
+                bpp = 2
+            size = tex.width * tex.height * max(tex.depth, 1) * max(tex.arraysize, 1) * bpp
+            # Account for mip chain (~1.33x)
+            if tex.mips > 1:
+                size = int(size * 1.33)
+            tex_total_bytes += size
+
+        # Buffer memory
+        buffers = controller.GetBuffers()
+        buf_total_bytes = sum(buf.length for buf in buffers)
+
+        # Detect render targets and their draw counts
+        rt_draw_counts: dict[str, int] = {}
+        for _eid, action in sorted(session._action_map.items()):
+            if not (action.flags & rd.ActionFlags.Drawcall):
+                continue
+            for o in action.outputs:
+                if int(o) != 0:
+                    key = str(o)
+                    rt_draw_counts[key] = rt_draw_counts.get(key, 0) + 1
+
+        render_targets = []
+        for rid_str, count in sorted(rt_draw_counts.items(), key=lambda x: -x[1]):
+            rt_entry: dict = {"resource_id": rid_str, "draw_count": count}
+            tex_desc = session.get_texture_desc(rid_str)
+            if tex_desc is not None:
+                rt_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
+                rt_entry["format"] = str(tex_desc.format.Name())
+            render_targets.append(rt_entry)
+
+        # Infer resolution from the most-used render target
+        resolution = "unknown"
+        if render_targets:
+            top_rt = render_targets[0]
+            if "size" in top_rt:
+                resolution = top_rt["size"]
+
+        result = {
+            "filepath": session.filepath,
+            "api": str(session._cap.APIVersion()) if session._cap else "unknown",
+            "resolution": resolution,
+            "total_actions": len(session._action_map),
+            "draw_calls": draw_calls,
+            "clears": clears,
+            "dispatches": dispatches,
+            "textures": {
+                "count": len(textures),
+                "total_memory_mb": round(tex_total_bytes / (1024 * 1024), 2),
+            },
+            "buffers": {
+                "count": len(buffers),
+                "total_memory_mb": round(buf_total_bytes / (1024 * 1024), 2),
+            },
+            "render_targets": render_targets,
+        }
+        return to_json(result)

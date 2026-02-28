@@ -17,6 +17,23 @@ from renderdoc_mcp.util import (
 )
 
 
+def _reflection_fallback(stage: str, refl) -> dict:
+    """Build a fallback result from shader reflection when disassembly is unavailable."""
+    result: dict = {
+        "stage": stage,
+        "source_type": "reflection_only",
+        "resource_id": str(refl.resourceId),
+        "entry_point": refl.entryPoint,
+        "input_signature": [serialize_sig_element(s) for s in refl.inputSignature],
+        "output_signature": [serialize_sig_element(s) for s in refl.outputSignature],
+        "constant_blocks": [{"name": cb.name, "byte_size": cb.byteSize} for cb in refl.constantBlocks],
+        "read_only_resources": [{"name": ro.name, "type": str(ro.resType)} for ro in refl.readOnlyResources],
+        "read_write_resources": [{"name": rw.name, "type": str(rw.resType)} for rw in refl.readWriteResources],
+        "note": "Disassembly unavailable — showing reflection data only",
+    }
+    return result
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     def disassemble_shader(
@@ -26,9 +43,12 @@ def register(mcp: FastMCP):
     ) -> str:
         """Disassemble the shader bound at the specified stage.
 
+        If target is omitted, tries all available targets in order and returns the
+        first successful result. Falls back to reflection info if all disassembly fails.
+
         Args:
             stage: Shader stage (vertex, hull, domain, geometry, pixel, compute).
-            target: Disassembly target/format. If omitted, uses the first available.
+            target: Disassembly target/format. If omitted, tries all available targets.
             event_id: Optional event ID to navigate to first.
         """
         session = get_session()
@@ -52,23 +72,43 @@ def register(mcp: FastMCP):
         targets = session.controller.GetDisassemblyTargets(True)
 
         if not targets:
-            return to_json(make_error("No disassembly targets available", "API_ERROR"))
+            # No disassembly available — fallback to reflection
+            return to_json(_reflection_fallback(stage, refl))
 
-        if target is None:
-            target = targets[0]
-        elif target not in targets:
-            return to_json(make_error(
-                f"Unknown disassembly target: {target}. Available: {targets}", "API_ERROR"
-            ))
+        if target is not None:
+            # User specified a target
+            if target not in targets:
+                return to_json(make_error(
+                    f"Unknown disassembly target: {target}. Available: {targets}", "API_ERROR"
+                ))
+            disasm = session.controller.DisassembleShader(pipe, refl, target)
+            return to_json({
+                "stage": stage,
+                "target": target,
+                "available_targets": list(targets),
+                "source_type": "disasm",
+                "disassembly": disasm,
+            })
 
-        disasm = session.controller.DisassembleShader(pipe, refl, target)
+        # Try each target in order
+        for t in targets:
+            try:
+                disasm = session.controller.DisassembleShader(pipe, refl, t)
+                if disasm and disasm.strip():
+                    return to_json({
+                        "stage": stage,
+                        "target": t,
+                        "available_targets": list(targets),
+                        "source_type": "disasm",
+                        "disassembly": disasm,
+                    })
+            except Exception:
+                continue
 
-        return to_json({
-            "stage": stage,
-            "target": target,
-            "available_targets": list(targets),
-            "disassembly": disasm,
-        })
+        # All targets failed — fallback to reflection
+        result = _reflection_fallback(stage, refl)
+        result["available_targets"] = list(targets)
+        return to_json(result)
 
     @mcp.tool()
     def get_shader_reflection(

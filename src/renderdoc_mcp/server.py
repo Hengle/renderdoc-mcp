@@ -19,7 +19,7 @@ from renderdoc_mcp.tools import (
 
 mcp = FastMCP(
     "renderdoc-mcp",
-    description="RenderDoc graphics debugger MCP server — analyze GPU frame captures (.rdc) with AI",
+    instructions="RenderDoc graphics debugger MCP server — analyze GPU frame captures (.rdc) with AI",
 )
 
 # ── Register all tool modules ──

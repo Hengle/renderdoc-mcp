@@ -17,22 +17,6 @@ from renderdoc_mcp.util import (
 )
 
 
-def _parse_resource_id(resource_id_str: str):
-    """Parse a resource ID string back to a ResourceId."""
-    # ResourceId can be constructed from its integer representation
-    for tex in get_session().controller.GetTextures():
-        if str(tex.resourceId) == resource_id_str:
-            return tex.resourceId
-    for buf in get_session().controller.GetBuffers():
-        if str(buf.resourceId) == resource_id_str:
-            return buf.resourceId
-    # Try all resources
-    for res in get_session().controller.GetResources():
-        if str(res.resourceId) == resource_id_str:
-            return res.resourceId
-    return None
-
-
 def register(mcp: FastMCP):
     @mcp.tool()
     def list_textures(filter_format: Optional[str] = None, min_width: Optional[int] = None) -> str:
@@ -126,7 +110,7 @@ def register(mcp: FastMCP):
         if err:
             return to_json(err)
 
-        rid = _parse_resource_id(resource_id)
+        rid = session.resolve_resource_id(resource_id)
         if rid is None:
             return to_json(make_error(f"Resource ID '{resource_id}' not found", "INVALID_RESOURCE_ID"))
 

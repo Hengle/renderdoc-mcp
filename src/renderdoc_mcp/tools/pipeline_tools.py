@@ -1,4 +1,4 @@
-"""Pipeline inspection tools: get_pipeline_state, get_shader_bindings, get_vertex_inputs."""
+"""Pipeline inspection tools: get_pipeline_state, get_shader_bindings, get_vertex_inputs, get_draw_call_state."""
 
 from __future__ import annotations
 
@@ -12,6 +12,16 @@ from renderdoc_mcp.util import (
     to_json,
     make_error,
     SHADER_STAGE_MAP,
+    BLEND_FACTOR_MAP,
+    BLEND_OP_MAP,
+    COMPARE_FUNC_MAP,
+    STENCIL_OP_MAP,
+    CULL_MODE_MAP,
+    FILL_MODE_MAP,
+    TOPOLOGY_MAP,
+    enum_str,
+    blend_formula,
+    serialize_sig_element,
 )
 
 
@@ -32,9 +42,9 @@ def _serialize_scissor(sc) -> dict:
 
 def _serialize_blend_eq(eq) -> dict:
     return {
-        "source": str(eq.source),
-        "destination": str(eq.destination),
-        "operation": str(eq.operation),
+        "source": enum_str(eq.source, BLEND_FACTOR_MAP, "BlendFactor."),
+        "destination": enum_str(eq.destination, BLEND_FACTOR_MAP, "BlendFactor."),
+        "operation": enum_str(eq.operation, BLEND_OP_MAP, "BlendOp."),
     }
 
 
@@ -61,7 +71,7 @@ def _serialize_pipeline_state(state) -> dict:
     # Input assembly
     try:
         topo = state.GetPrimitiveTopology()
-        result["topology"] = str(topo)
+        result["topology"] = enum_str(topo, TOPOLOGY_MAP, "Topology.")
     except Exception:
         pass
 
@@ -82,8 +92,8 @@ def _serialize_pipeline_state(state) -> dict:
     try:
         raster = state.GetRasterizer()
         result["rasterizer"] = {
-            "fill_mode": str(raster.fillMode),
-            "cull_mode": str(raster.cullMode),
+            "fill_mode": enum_str(raster.fillMode, FILL_MODE_MAP, "FillMode."),
+            "cull_mode": enum_str(raster.cullMode, CULL_MODE_MAP, "CullMode."),
             "front_ccw": raster.frontCCW,
             "depth_bias": raster.depthBias,
             "depth_clip": raster.depthClip,
@@ -98,12 +108,20 @@ def _serialize_pipeline_state(state) -> dict:
         cb = state.GetColorBlend()
         blends = []
         for b in cb.blends:
-            blends.append({
+            color_eq = _serialize_blend_eq(b.colorBlend)
+            alpha_eq = _serialize_blend_eq(b.alphaBlend)
+            entry = {
                 "enabled": b.enabled,
                 "write_mask": b.writeMask,
-                "color": _serialize_blend_eq(b.colorBlend),
-                "alpha": _serialize_blend_eq(b.alphaBlend),
-            })
+                "color": color_eq,
+                "alpha": alpha_eq,
+            }
+            if b.enabled:
+                entry["formula"] = blend_formula(
+                    color_eq["source"], color_eq["destination"], color_eq["operation"],
+                    alpha_eq["source"], alpha_eq["destination"], alpha_eq["operation"],
+                )
+            blends.append(entry)
         result["color_blend"] = {
             "blend_factor": [cb.blendFactor.x, cb.blendFactor.y, cb.blendFactor.z, cb.blendFactor.w],
             "blends": blends,
@@ -116,7 +134,7 @@ def _serialize_pipeline_state(state) -> dict:
         ds = state.GetDepthState()
         result["depth_state"] = {
             "depth_enable": ds.depthEnable,
-            "depth_function": str(ds.depthFunction),
+            "depth_function": enum_str(ds.depthFunction, COMPARE_FUNC_MAP, "CompareFunc."),
             "depth_write_mask": ds.depthWrites,
         }
     except Exception:
@@ -339,3 +357,187 @@ def register(mcp: FastMCP):
             "vertex_attributes": attr_list,
         }
         return to_json(result)
+
+    @mcp.tool()
+    def get_draw_call_state(event_id: int) -> str:
+        """Get complete draw call state in a single call.
+
+        Returns action info, blend, depth, stencil, rasterizer, bound textures,
+        render targets, and shader summaries — everything needed to understand a draw call.
+
+        Args:
+            event_id: The event ID of the draw call to inspect.
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        result = _get_draw_state_dict(session, event_id)
+        if "error" in result:
+            return to_json(result)
+        return to_json(result)
+
+
+def _get_draw_state_dict(session, event_id: int) -> dict:
+    """Internal helper: build a complete draw call state dict.
+
+    Shared by get_draw_call_state and diff_draw_calls.
+    """
+    err = session.set_event(event_id)
+    if err:
+        return err
+
+    action = session.get_action(event_id)
+    if action is None:
+        return make_error(f"Event ID {event_id} not found", "INVALID_EVENT_ID")
+
+    sf = session.structured_file
+    state = session.controller.GetPipelineState()
+
+    result: dict = {
+        "event_id": event_id,
+        "action_name": action.GetName(sf),
+        "vertex_count": action.numIndices,
+        "instance_count": action.numInstances,
+    }
+
+    # Topology
+    try:
+        topo = state.GetPrimitiveTopology()
+        result["topology"] = enum_str(topo, TOPOLOGY_MAP, "Topology.")
+    except Exception:
+        result["topology"] = "Unknown"
+
+    # Blend state (first enabled blend target)
+    try:
+        cb = state.GetColorBlend()
+        if cb.blends:
+            b = cb.blends[0]
+            color_eq = _serialize_blend_eq(b.colorBlend)
+            alpha_eq = _serialize_blend_eq(b.alphaBlend)
+            blend_info: dict = {
+                "enabled": b.enabled,
+                "color_src": color_eq["source"],
+                "color_dst": color_eq["destination"],
+                "color_op": color_eq["operation"],
+                "alpha_src": alpha_eq["source"],
+                "alpha_dst": alpha_eq["destination"],
+                "alpha_op": alpha_eq["operation"],
+            }
+            if b.enabled:
+                blend_info["formula"] = blend_formula(
+                    color_eq["source"], color_eq["destination"], color_eq["operation"],
+                    alpha_eq["source"], alpha_eq["destination"], alpha_eq["operation"],
+                )
+            result["blend"] = blend_info
+    except Exception:
+        pass
+
+    # Depth state
+    try:
+        ds = state.GetDepthState()
+        result["depth"] = {
+            "test": ds.depthEnable,
+            "write": ds.depthWrites,
+            "func": enum_str(ds.depthFunction, COMPARE_FUNC_MAP, "CompareFunc."),
+        }
+    except Exception:
+        pass
+
+    # Stencil state
+    try:
+        ss = state.GetStencilState()
+        result["stencil"] = {"enabled": ss.stencilEnable}
+    except Exception:
+        pass
+
+    # Rasterizer
+    try:
+        raster = state.GetRasterizer()
+        result["rasterizer"] = {
+            "cull": enum_str(raster.cullMode, CULL_MODE_MAP, "CullMode."),
+            "fill": enum_str(raster.fillMode, FILL_MODE_MAP, "FillMode."),
+            "front_ccw": raster.frontCCW,
+        }
+    except Exception:
+        pass
+
+    # Textures bound to pixel shader
+    textures = []
+    try:
+        ps_refl = state.GetShaderReflection(rd.ShaderStage.Pixel)
+        if ps_refl is not None:
+            for i, ro_refl in enumerate(ps_refl.readOnlyResources):
+                try:
+                    ro_bind = state.GetReadOnlyResources(rd.ShaderStage.Pixel, i, False)
+                    for b in ro_bind:
+                        rid_str = str(b.descriptor.resource)
+                        tex_desc = session.get_texture_desc(rid_str)
+                        tex_entry: dict = {
+                            "slot": i,
+                            "name": ro_refl.name,
+                            "resource_id": rid_str,
+                        }
+                        if tex_desc is not None:
+                            tex_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
+                            tex_entry["format"] = str(tex_desc.format.Name())
+                        textures.append(tex_entry)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    result["textures"] = textures
+
+    # Render targets
+    render_targets = []
+    try:
+        outputs = state.GetOutputTargets()
+        for o in outputs:
+            if int(o.resourceId) == 0:
+                continue
+            rid_str = str(o.resourceId)
+            rt_entry: dict = {"resource_id": rid_str}
+            tex_desc = session.get_texture_desc(rid_str)
+            if tex_desc is not None:
+                rt_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
+                rt_entry["format"] = str(tex_desc.format.Name())
+            render_targets.append(rt_entry)
+    except Exception:
+        pass
+    result["render_targets"] = render_targets
+
+    # Depth target
+    try:
+        dt = state.GetDepthTarget()
+        if int(dt.resourceId) != 0:
+            rid_str = str(dt.resourceId)
+            dt_entry: dict = {"resource_id": rid_str}
+            tex_desc = session.get_texture_desc(rid_str)
+            if tex_desc is not None:
+                dt_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
+                dt_entry["format"] = str(tex_desc.format.Name())
+            result["depth_target"] = dt_entry
+    except Exception:
+        pass
+
+    # Shader summaries
+    shaders = {}
+    for sname, sstage in SHADER_STAGE_MAP.items():
+        if sstage == rd.ShaderStage.Compute:
+            continue
+        refl = state.GetShaderReflection(sstage)
+        if refl is None:
+            continue
+        info: dict = {
+            "resource_id": str(refl.resourceId),
+            "entry_point": state.GetShaderEntryPoint(sstage),
+        }
+        if sname == "vertex":
+            info["inputs"] = [s.semanticIdxName or s.varName for s in refl.inputSignature]
+        if sname == "pixel":
+            info["texture_count"] = len(refl.readOnlyResources)
+        shaders[sname] = info
+    result["shaders"] = shaders
+
+    return result

@@ -1,4 +1,4 @@
-"""Event navigation tools: list_actions, get_action, set_event, search_actions."""
+"""Event navigation tools: list_actions, get_action, set_event, search_actions, find_draws."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from renderdoc_mcp.util import (
     serialize_action_detail,
     flags_to_list,
     make_error,
+    SHADER_STAGE_MAP,
 )
 
 
@@ -169,3 +170,104 @@ def register(mcp: FastMCP):
             })
 
         return to_json({"matches": results, "count": len(results)})
+
+    @mcp.tool()
+    def find_draws(
+        blend: Optional[bool] = None,
+        min_vertices: Optional[int] = None,
+        texture_id: Optional[str] = None,
+        shader_id: Optional[str] = None,
+        render_target_id: Optional[str] = None,
+        max_results: int = 50,
+    ) -> str:
+        """Search draw calls by rendering state filters.
+
+        Iterates through draw calls checking pipeline state. This can be slow
+        for large captures as it must set_event for each draw call.
+
+        Args:
+            blend: Filter by blend enabled state (True/False).
+            min_vertices: Minimum vertex count to include.
+            texture_id: Only draws using this texture resource ID.
+            shader_id: Only draws using this shader resource ID.
+            render_target_id: Only draws targeting this render target.
+            max_results: Maximum results to return (default 50).
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        sf = session.structured_file
+        results = []
+
+        for eid in sorted(session._action_map.keys()):
+            if len(results) >= max_results:
+                break
+
+            action = session._action_map[eid]
+            if not (action.flags & rd.ActionFlags.Drawcall):
+                continue
+
+            # Quick filters before expensive set_event
+            if min_vertices is not None and action.numIndices < min_vertices:
+                continue
+
+            if render_target_id is not None:
+                output_ids = [str(o) for o in action.outputs if int(o) != 0]
+                if render_target_id not in output_ids:
+                    continue
+
+            # Need pipeline state for blend/texture/shader filters
+            needs_state = (blend is not None or texture_id is not None or shader_id is not None)
+            if needs_state:
+                session.controller.SetFrameEvent(eid, True)
+                state = session.controller.GetPipelineState()
+
+                if blend is not None:
+                    try:
+                        cb = state.GetColorBlend()
+                        blend_enabled = cb.blends[0].enabled if cb.blends else False
+                        if blend_enabled != blend:
+                            continue
+                    except Exception:
+                        continue
+
+                if shader_id is not None:
+                    found = False
+                    for _sname, sstage in SHADER_STAGE_MAP.items():
+                        if sstage == rd.ShaderStage.Compute:
+                            continue
+                        refl = state.GetShaderReflection(sstage)
+                        if refl is not None and str(refl.resourceId) == shader_id:
+                            found = True
+                            break
+                    if not found:
+                        continue
+
+                if texture_id is not None:
+                    found = False
+                    ps_refl = state.GetShaderReflection(rd.ShaderStage.Pixel)
+                    if ps_refl is not None:
+                        for i, ro_refl in enumerate(ps_refl.readOnlyResources):
+                            try:
+                                ro_bind = state.GetReadOnlyResources(rd.ShaderStage.Pixel, i, False)
+                                for b in ro_bind:
+                                    if str(b.descriptor.resource) == texture_id:
+                                        found = True
+                                        break
+                            except Exception:
+                                pass
+                            if found:
+                                break
+                    if not found:
+                        continue
+
+            results.append({
+                "event_id": eid,
+                "name": action.GetName(sf),
+                "flags": flags_to_list(action.flags),
+                "num_indices": action.numIndices,
+            })
+
+        return to_json({"matches": results, "count": len(results), "max_results": max_results})

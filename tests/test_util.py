@@ -43,7 +43,15 @@ from renderdoc_mcp.util import (  # noqa: E402
     to_json,
     serialize_action,
     serialize_shader_variable,
+    enum_str,
+    blend_formula,
     _ACTION_FLAG_NAMES,
+    BLEND_FACTOR_MAP,
+    BLEND_OP_MAP,
+    COMPARE_FUNC_MAP,
+    TOPOLOGY_MAP,
+    CULL_MODE_MAP,
+    FILL_MODE_MAP,
 )
 import renderdoc_mcp.util as util  # noqa: E402
 
@@ -193,6 +201,75 @@ class TestSerializeShaderVariable(unittest.TestCase):
         self.assertIn("members", result)
         # At depth 1, child's members should not be expanded
         self.assertNotIn("members", result["members"][0])
+
+
+class TestEnumStr(unittest.TestCase):
+    def test_known_value(self):
+        self.assertEqual(enum_str(0, BLEND_FACTOR_MAP), "Zero")
+        self.assertEqual(enum_str(1, BLEND_FACTOR_MAP), "One")
+        self.assertEqual(enum_str(6, BLEND_FACTOR_MAP), "SrcAlpha")
+
+    def test_unknown_value(self):
+        result = enum_str(99, BLEND_FACTOR_MAP, "BlendFactor.")
+        self.assertEqual(result, "BlendFactor.99")
+
+    def test_compare_func(self):
+        self.assertEqual(enum_str(2, COMPARE_FUNC_MAP), "Less")
+        self.assertEqual(enum_str(3, COMPARE_FUNC_MAP), "LessEqual")
+        self.assertEqual(enum_str(8, COMPARE_FUNC_MAP), "Always")
+
+    def test_topology(self):
+        self.assertEqual(enum_str(4, TOPOLOGY_MAP), "TriangleList")
+        self.assertEqual(enum_str(1, TOPOLOGY_MAP), "PointList")
+
+    def test_cull_fill(self):
+        self.assertEqual(enum_str(2, CULL_MODE_MAP), "Back")
+        self.assertEqual(enum_str(0, FILL_MODE_MAP), "Solid")
+
+    def test_blend_op(self):
+        self.assertEqual(enum_str(0, BLEND_OP_MAP), "Add")
+        self.assertEqual(enum_str(1, BLEND_OP_MAP), "Subtract")
+
+    def test_enum_like_object(self):
+        # Simulate a renderdoc enum that has __int__
+        class FakeEnum:
+            def __int__(self):
+                return 6
+        self.assertEqual(enum_str(FakeEnum(), BLEND_FACTOR_MAP), "SrcAlpha")
+
+    def test_non_int_fallback(self):
+        result = enum_str("not_a_number", {}, "Prefix.")
+        self.assertEqual(result, "not_a_number")
+
+
+class TestBlendFormula(unittest.TestCase):
+    def test_standard_alpha_blend(self):
+        result = blend_formula("SrcAlpha", "InvSrcAlpha", "Add",
+                               "SrcAlpha", "InvSrcAlpha", "Add")
+        self.assertIn("src.a*src.rgb", result)
+        self.assertIn("(1-src.a)*dst.rgb", result)
+
+    def test_additive_blend(self):
+        result = blend_formula("One", "One", "Add",
+                               "One", "One", "Add")
+        self.assertIn("1*src.rgb", result)
+        self.assertIn("1*dst.rgb", result)
+
+    def test_subtract_blend(self):
+        result = blend_formula("One", "One", "Subtract",
+                               "One", "One", "Subtract")
+        self.assertIn("1*src.rgb - 1*dst.rgb", result)
+
+    def test_min_max_blend(self):
+        result_min = blend_formula("One", "One", "Min", "One", "One", "Min")
+        self.assertIn("min(", result_min)
+        result_max = blend_formula("One", "One", "Max", "One", "One", "Max")
+        self.assertIn("max(", result_max)
+
+    def test_rev_subtract(self):
+        result = blend_formula("SrcAlpha", "DstAlpha", "RevSubtract",
+                               "One", "Zero", "Add")
+        self.assertIn("dst.a*dst.rgb - src.a*src.rgb", result)
 
 
 if __name__ == "__main__":
