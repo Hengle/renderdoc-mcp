@@ -87,9 +87,14 @@ def register(mcp: FastMCP):
             if type_filter and type_filter.lower() not in str(res.type).lower():
                 continue
             try:
-                name = res.name if isinstance(res.name, str) else res.name.decode("utf-8", errors="replace")
+                name = res.name
             except Exception:
-                name = repr(res.name)
+                name = f"<unreadable name for {str(res.resourceId)}>"
+            if not isinstance(name, str):
+                try:
+                    name = name.decode("utf-8", errors="replace")
+                except Exception:
+                    name = repr(name)
             if pattern and not pattern.search(name):
                 continue
             results.append({
