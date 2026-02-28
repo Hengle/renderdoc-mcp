@@ -200,6 +200,7 @@ def register(mcp: FastMCP):
 
         sf = session.structured_file
         results = []
+        saved_event = session.current_event
 
         for eid in sorted(session._action_map.keys()):
             if len(results) >= max_results:
@@ -221,7 +222,7 @@ def register(mcp: FastMCP):
             # Need pipeline state for blend/texture/shader filters
             needs_state = (blend is not None or texture_id is not None or shader_id is not None)
             if needs_state:
-                session.controller.SetFrameEvent(eid, True)
+                session.set_event(eid)
                 state = session.controller.GetPipelineState()
 
                 if blend is not None:
@@ -266,5 +267,9 @@ def register(mcp: FastMCP):
                 "flags": flags_to_list(action.flags),
                 "num_indices": action.numIndices,
             })
+
+        # Restore the original event position
+        if saved_event is not None:
+            session.set_event(saved_event)
 
         return to_json({"matches": results, "count": len(results), "max_results": max_results})
