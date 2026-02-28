@@ -228,9 +228,15 @@ def register(mcp: FastMCP):
         if refl is None:
             return to_json(make_error(f"No shader bound at stage '{stage}'", "API_ERROR"))
 
-        if cbuffer_index < 0 or cbuffer_index >= len(refl.constantBlocks):
+        num_cbs = len(refl.constantBlocks)
+        if num_cbs == 0:
             return to_json(make_error(
-                f"cbuffer_index {cbuffer_index} out of range (0-{len(refl.constantBlocks)-1})",
+                f"Shader at stage '{stage}' has no constant buffers",
+                "API_ERROR",
+            ))
+        if cbuffer_index < 0 or cbuffer_index >= num_cbs:
+            return to_json(make_error(
+                f"cbuffer_index {cbuffer_index} out of range (0-{num_cbs - 1})",
                 "API_ERROR",
             ))
 
