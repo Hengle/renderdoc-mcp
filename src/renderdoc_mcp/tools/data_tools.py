@@ -12,9 +12,11 @@ from renderdoc_mcp.util import (
     rd,
     to_json,
     make_error,
+    enum_str,
     FILE_TYPE_MAP,
     SHADER_STAGE_MAP,
     MESH_DATA_STAGE_MAP,
+    TOPOLOGY_MAP,
 )
 
 
@@ -426,7 +428,7 @@ def register(mcp: FastMCP):
         float_offset = 0
         for sig in out_sig:
             name = (sig.semanticName or sig.varName or "").upper()
-            if "POSITION" in name or "SV_POSITION" in name.replace("SV_Position", "SV_POSITION"):
+            if "POSITION" in name:
                 pos_idx = float_offset
             elif "NORMAL" in name:
                 norm_idx = float_offset
@@ -473,8 +475,15 @@ def register(mcp: FastMCP):
         output_path = os.path.normpath(output_path)
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
+        # Determine topology for correct face generation
+        try:
+            topo = state.GetPrimitiveTopology()
+            topo_name = enum_str(topo, TOPOLOGY_MAP, "Topology.")
+        except Exception:
+            topo_name = "TriangleList"
+
         lines = [f"# Exported from RenderDoc MCP - event {event_id}"]
-        lines.append(f"# Vertices: {len(positions)}")
+        lines.append(f"# Vertices: {len(positions)}, Topology: {topo_name}")
 
         for p in positions:
             lines.append(f"v {p[0]:.6f} {p[1]:.6f} {p[2]:.6f}")
@@ -485,11 +494,27 @@ def register(mcp: FastMCP):
         for uv in uvs:
             lines.append(f"vt {uv[0]:.6f} {uv[1]:.6f}")
 
-        # Triangles (1-indexed)
+        # Build triangle indices based on topology
         has_normals = len(normals) == len(positions)
         has_uvs = len(uvs) == len(positions)
-        for i in range(0, len(positions) - 2, 3):
-            i1, i2, i3 = i + 1, i + 2, i + 3  # OBJ is 1-indexed
+        triangles: list[tuple[int, int, int]] = []  # 0-indexed
+
+        if topo_name == "TriangleStrip":
+            for i in range(len(positions) - 2):
+                if i % 2 == 0:
+                    triangles.append((i, i + 1, i + 2))
+                else:
+                    triangles.append((i, i + 2, i + 1))  # flip winding
+        elif topo_name == "TriangleFan":
+            for i in range(1, len(positions) - 1):
+                triangles.append((0, i, i + 1))
+        else:
+            # TriangleList and all other topologies default to list
+            for i in range(0, len(positions) - 2, 3):
+                triangles.append((i, i + 1, i + 2))
+
+        for t in triangles:
+            i1, i2, i3 = t[0] + 1, t[1] + 1, t[2] + 1  # OBJ is 1-indexed
             if has_normals and has_uvs:
                 lines.append(f"f {i1}/{i1}/{i1} {i2}/{i2}/{i2} {i3}/{i3}/{i3}")
             elif has_normals:
@@ -505,8 +530,9 @@ def register(mcp: FastMCP):
         return to_json({
             "event_id": event_id,
             "output_path": output_path,
+            "topology": topo_name,
             "vertices": len(positions),
             "normals": len(normals),
             "uvs": len(uvs),
-            "triangles": len(positions) // 3,
+            "triangles": len(triangles),
         })
