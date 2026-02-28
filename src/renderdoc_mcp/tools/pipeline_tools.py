@@ -51,6 +51,7 @@ def _serialize_blend_eq(eq) -> dict:
 def _serialize_pipeline_state(state) -> dict:
     """Extract a comprehensive pipeline state summary."""
     result: dict = {}
+    warnings: list[str] = []
 
     # Shader stages
     shaders = {}
@@ -72,21 +73,21 @@ def _serialize_pipeline_state(state) -> dict:
     try:
         topo = state.GetPrimitiveTopology()
         result["topology"] = enum_str(topo, TOPOLOGY_MAP, "Topology.")
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"topology: {type(e).__name__}: {e}")
 
     # Viewports and scissors
     try:
         viewports = state.GetViewports()
         result["viewports"] = [_serialize_viewport(vp) for vp in viewports]
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"viewports: {type(e).__name__}: {e}")
 
     try:
         scissors = state.GetScissors()
         result["scissors"] = [_serialize_scissor(sc) for sc in scissors]
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"scissors: {type(e).__name__}: {e}")
 
     # Rasterizer state
     try:
@@ -100,8 +101,8 @@ def _serialize_pipeline_state(state) -> dict:
             "scissor_enable": raster.scissorEnable,
             "multisample_enable": raster.multisampleEnable,
         }
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"rasterizer: {type(e).__name__}: {e}")
 
     # Color blend
     try:
@@ -126,8 +127,8 @@ def _serialize_pipeline_state(state) -> dict:
             "blend_factor": [cb.blendFactor.x, cb.blendFactor.y, cb.blendFactor.z, cb.blendFactor.w],
             "blends": blends,
         }
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"color_blend: {type(e).__name__}: {e}")
 
     # Depth state
     try:
@@ -137,8 +138,8 @@ def _serialize_pipeline_state(state) -> dict:
             "depth_function": enum_str(ds.depthFunction, COMPARE_FUNC_MAP, "CompareFunc."),
             "depth_write_mask": ds.depthWrites,
         }
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"depth_state: {type(e).__name__}: {e}")
 
     # Stencil state
     try:
@@ -146,8 +147,8 @@ def _serialize_pipeline_state(state) -> dict:
         result["stencil_state"] = {
             "stencil_enable": ss.stencilEnable,
         }
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"stencil_state: {type(e).__name__}: {e}")
 
     # Output targets
     try:
@@ -155,15 +156,18 @@ def _serialize_pipeline_state(state) -> dict:
         result["output_targets"] = [
             {"resource_id": str(o.resource)} for o in outputs if int(o.resource) != 0
         ]
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"output_targets: {type(e).__name__}: {e}")
 
     try:
         depth = state.GetDepthTarget()
         if int(depth.resource) != 0:
             result["depth_target"] = {"resource_id": str(depth.resource)}
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"depth_target: {type(e).__name__}: {e}")
+
+    if warnings:
+        result["warnings"] = warnings
 
     return result
 
@@ -414,6 +418,8 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
     sf = session.structured_file
     state = session.controller.GetPipelineState()
 
+    warnings: list[str] = []
+
     result: dict = {
         "event_id": event_id,
         "action_name": action.GetName(sf),
@@ -425,8 +431,9 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
     try:
         topo = state.GetPrimitiveTopology()
         result["topology"] = enum_str(topo, TOPOLOGY_MAP, "Topology.")
-    except Exception:
+    except Exception as e:
         result["topology"] = "Unknown"
+        warnings.append(f"topology: {type(e).__name__}: {e}")
 
     # Blend state (first enabled blend target)
     try:
@@ -450,8 +457,8 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
                     alpha_eq["source"], alpha_eq["destination"], alpha_eq["operation"],
                 )
             result["blend"] = blend_info
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"blend: {type(e).__name__}: {e}")
 
     # Depth state
     try:
@@ -461,15 +468,15 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
             "write": ds.depthWrites,
             "func": enum_str(ds.depthFunction, COMPARE_FUNC_MAP, "CompareFunc."),
         }
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"depth: {type(e).__name__}: {e}")
 
     # Stencil state
     try:
         ss = state.GetStencilState()
         result["stencil"] = {"enabled": ss.stencilEnable}
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"stencil: {type(e).__name__}: {e}")
 
     # Rasterizer
     try:
@@ -479,8 +486,8 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
             "fill": enum_str(raster.fillMode, FILL_MODE_MAP, "FillMode."),
             "front_ccw": raster.frontCCW,
         }
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"rasterizer: {type(e).__name__}: {e}")
 
     # Textures bound to pixel shader
     textures = []
@@ -504,8 +511,8 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
                         tex_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
                         tex_entry["format"] = str(tex_desc.format.Name())
                     textures.append(tex_entry)
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"textures: {type(e).__name__}: {e}")
     result["textures"] = textures
 
     # Render targets
@@ -522,8 +529,8 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
                 rt_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
                 rt_entry["format"] = str(tex_desc.format.Name())
             render_targets.append(rt_entry)
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"render_targets: {type(e).__name__}: {e}")
     result["render_targets"] = render_targets
 
     # Depth target
@@ -537,8 +544,11 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
                 dt_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
                 dt_entry["format"] = str(tex_desc.format.Name())
             result["depth_target"] = dt_entry
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.append(f"depth_target: {type(e).__name__}: {e}")
+
+    if warnings:
+        result["warnings"] = warnings
 
     # Shader summaries
     shaders = {}
