@@ -180,12 +180,16 @@ def register(mcp: FastMCP):
     def get_texture_stats(
         resource_id: str,
         event_id: Optional[int] = None,
+        all_slices: bool = False,
     ) -> str:
         """Get min/max/average statistics for a texture at the current event.
 
         Args:
             resource_id: The texture resource ID string.
             event_id: Optional event ID to navigate to first.
+            all_slices: If True, return per-slice/per-face statistics. Useful for
+                        cubemaps (returns stats for each of the 6 faces) and texture arrays.
+                        Default False returns only slice 0.
         """
         session = get_session()
         err = session.require_open()
@@ -199,23 +203,153 @@ def register(mcp: FastMCP):
         if tex_id is None:
             return to_json(make_error(f"Texture resource '{resource_id}' not found", "INVALID_RESOURCE_ID"))
 
-        histogram = session.controller.GetMinMax(tex_id, rd.Subresource(0, 0, 0), rd.CompType.Typeless)
+        tex_desc = session.get_texture_desc(resource_id)
 
-        return to_json({
+        def _minmax_to_dict(mm):
+            mn, mx = mm[0], mm[1]
+            r_min, g_min, b_min, a_min = mn.floatValue[0], mn.floatValue[1], mn.floatValue[2], mn.floatValue[3]
+            r_max, g_max, b_max, a_max = mx.floatValue[0], mx.floatValue[1], mx.floatValue[2], mx.floatValue[3]
+            has_neg = any(v < 0 for v in [r_min, g_min, b_min])
+            import math
+            has_inf = any(math.isinf(v) for v in [r_max, g_max, b_max])
+            has_nan = any(math.isnan(v) for v in [r_min, g_min, b_min, r_max, g_max, b_max])
+            d: dict = {
+                "min": {"r": r_min, "g": g_min, "b": b_min, "a": a_min},
+                "max": {"r": r_max, "g": g_max, "b": b_max, "a": a_max},
+                "has_negative": has_neg,
+                "has_inf": has_inf,
+                "has_nan": has_nan,
+            }
+            warnings = []
+            if has_nan:
+                warnings.append("⚠️ 检测到 NaN 值")
+            if has_inf:
+                warnings.append("⚠️ 检测到 Inf 值")
+            if has_neg:
+                warnings.append("⚠️ 检测到负值")
+            if warnings:
+                d["warnings"] = warnings
+            return d
+
+        result: dict = {"resource_id": resource_id}
+        if tex_desc is not None:
+            result["name"] = tex_desc.name if hasattr(tex_desc, "name") else ""
+            result["size"] = f"{tex_desc.width}x{tex_desc.height}"
+            result["format"] = str(tex_desc.format.Name())
+            result["mips"] = tex_desc.mips
+            result["array_size"] = tex_desc.arraysize
+
+        # Cubemap face names
+        _FACE_NAMES = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
+
+        if all_slices and tex_desc is not None:
+            num_slices = max(tex_desc.arraysize, 1)
+            is_cubemap = num_slices == 6 or (hasattr(tex_desc, "dimension") and "Cube" in str(tex_desc.dimension))
+            per_slice = []
+            for s in range(num_slices):
+                try:
+                    mm = session.controller.GetMinMax(tex_id, rd.Subresource(0, s, 0), rd.CompType.Typeless)
+                    entry = _minmax_to_dict(mm)
+                    if is_cubemap and s < 6:
+                        entry["face"] = _FACE_NAMES[s]
+                    else:
+                        entry["slice"] = s
+                    per_slice.append(entry)
+                except Exception as e:
+                    per_slice.append({"slice": s, "error": str(e)})
+            result["per_slice_stats"] = per_slice
+        else:
+            mm = session.controller.GetMinMax(tex_id, rd.Subresource(0, 0, 0), rd.CompType.Typeless)
+            result.update(_minmax_to_dict(mm))
+
+        return to_json(result)
+
+    @mcp.tool()
+    def read_texture_pixels(
+        resource_id: str,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        mip_level: int = 0,
+        array_slice: int = 0,
+        event_id: Optional[int] = None,
+    ) -> str:
+        """Read actual pixel values from a rectangular region of a texture.
+
+        Returns float RGBA values for each pixel. Region is capped at 64x64.
+        Useful for precisely checking IBL cubemap faces, LUT textures, history buffers, etc.
+
+        Args:
+            resource_id: The texture resource ID string.
+            x: Top-left X coordinate of the region.
+            y: Top-left Y coordinate of the region.
+            width: Region width (max 64).
+            height: Region height (max 64).
+            mip_level: Mip level to read (default 0).
+            array_slice: Array slice or cubemap face index (default 0).
+                         Cubemap face order: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z.
+            event_id: Optional event ID to navigate to first.
+        """
+        import struct as _struct
+        import math as _math
+
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+        err = session.ensure_event(event_id)
+        if err:
+            return to_json(err)
+
+        tex_id = session.resolve_resource_id(resource_id)
+        if tex_id is None:
+            return to_json(make_error(f"Texture resource '{resource_id}' not found", "INVALID_RESOURCE_ID"))
+
+        width = min(width, 64)
+        height = min(height, 64)
+
+        pixels: list[list] = []
+        anomalies: list[dict] = []
+
+        for py in range(y, y + height):
+            row: list = []
+            for px in range(x, x + width):
+                try:
+                    val = session.controller.PickPixel(
+                        tex_id, px, py,
+                        rd.Subresource(mip_level, array_slice, 0),
+                        rd.CompType.Typeless,
+                    )
+                    r, g, b, a = (val.floatValue[0], val.floatValue[1],
+                                  val.floatValue[2], val.floatValue[3])
+                    pixel = [round(r, 6), round(g, 6), round(b, 6), round(a, 6)]
+                    row.append(pixel)
+
+                    # Anomaly detection
+                    for ch_idx, ch_val in enumerate(pixel[:3]):
+                        ch_name = "rgba"[ch_idx]
+                        if _math.isnan(ch_val):
+                            anomalies.append({"x": px, "y": py, "channel": ch_name, "type": "NaN"})
+                        elif _math.isinf(ch_val):
+                            anomalies.append({"x": px, "y": py, "channel": ch_name, "type": "Inf", "value": str(ch_val)})
+                        elif ch_val < 0:
+                            anomalies.append({"x": px, "y": py, "channel": ch_name, "type": "negative", "value": round(ch_val, 6)})
+                except Exception as e:
+                    row.append({"error": str(e)})
+            pixels.append(row)
+
+        result: dict = {
             "resource_id": resource_id,
-            "min": {
-                "r": histogram[0].floatValue[0],
-                "g": histogram[0].floatValue[1],
-                "b": histogram[0].floatValue[2],
-                "a": histogram[0].floatValue[3],
-            },
-            "max": {
-                "r": histogram[1].floatValue[0],
-                "g": histogram[1].floatValue[1],
-                "b": histogram[1].floatValue[2],
-                "a": histogram[1].floatValue[3],
-            },
-        })
+            "region": {"x": x, "y": y, "width": width, "height": height},
+            "mip_level": mip_level,
+            "array_slice": array_slice,
+            "pixels": pixels,
+        }
+        if anomalies:
+            result["anomalies"] = anomalies
+            result["anomaly_count"] = len(anomalies)
+        return to_json(result)
 
     @mcp.tool()
     def export_draw_textures(

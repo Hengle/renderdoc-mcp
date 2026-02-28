@@ -6,13 +6,14 @@ Built on the [Model Context Protocol](https://modelcontextprotocol.io/), works w
 
 ## Features
 
-- **31 tools** covering the full RenderDoc analysis workflow
-- **8 high-level tools** for one-call analysis (draw call state, frame overview, diff, batch export, etc.)
-- **3 built-in prompts** for guided debugging
+- **42 tools** covering the full RenderDoc analysis workflow
+- **10 high-level tools** for one-call analysis (draw call state, frame overview, diff, batch export, pixel region sampling, etc.)
+- **4 built-in prompts** for guided debugging, including mobile GPU flash artifact diagnosis
 - **Human-readable output** — blend modes, depth functions, topology shown as names not numbers
+- **GPU quirk detection** — auto-identifies Adreno/Mali/PowerVR/Apple-specific pitfalls from driver name
 - **Headless** — no GUI needed, runs entirely via RenderDoc's Python replay API
 - **Pure Python** — single `pip install`, no build step
-- Supports D3D11, D3D12, OpenGL, Vulkan captures
+- Supports D3D11, D3D12, OpenGL, Vulkan, OpenGL ES captures
 
 ## Quick Start
 
@@ -115,27 +116,43 @@ Once configured, just talk to your AI assistant:
 ### Typical Tool Flow
 
 ```
-open_capture("frame.rdc")                  # Load the capture
-├── get_frame_overview()                    # Frame-level stats and render passes
-├── get_draw_call_state(142)                # Complete draw call state in one call
-├── diff_draw_calls(140, 142)               # Compare two draw calls
-├── export_draw_textures(142, "./tex/")     # Batch export all bound textures
-├── save_render_target(142, "./rt.png")     # Save render target snapshot
-├── analyze_render_passes()                 # Auto-detect render pass boundaries
-├── find_draws(blend=True, min_vertices=1000) # Search by rendering state
-├── pixel_history(id, 512, 384)             # Debug a specific pixel
-├── export_mesh(142, "./mesh.obj")          # Export mesh as OBJ
-└── close_capture()                         # Clean up
+open_capture("frame.rdc")                     # Load the capture
+├── get_capture_info()                         # API, GPU, known_gpu_quirks
+├── get_frame_overview()                       # Frame-level stats and render passes
+├── get_draw_call_state(142)                   # Complete draw call state in one call
+├── diff_draw_calls(140, 142)                  # Compare two draw calls (with implications)
+├── export_draw_textures(142, "./tex/")        # Batch export all bound textures
+├── save_render_target(142, "./rt.png")        # Save render target snapshot
+├── analyze_render_passes()                    # Auto-detect render pass boundaries
+├── find_draws(blend=True, min_vertices=1000)  # Search by rendering state
+├── sample_pixel_region(rt_id, 0,0,512,512)   # Scan RT region for NaN/Inf/negatives
+├── pixel_history(id, 512, 384)               # Debug a specific pixel
+├── export_mesh(142, "./mesh.obj")             # Export mesh as OBJ
+└── close_capture()                            # Clean up
+```
+
+For performance and diagnostic analysis:
+
+```
+get_pass_timing(granularity="pass")      # Find most expensive render passes
+analyze_overdraw()                        # Fill-rate pressure estimate
+analyze_bandwidth()                       # Memory bandwidth estimate
+analyze_state_changes()                   # Batching opportunities
+diagnose_negative_values()               # Find NaN/Inf/negative color values (爆闪)
+diagnose_precision_issues()              # R11G11B10, D16, SRGB mismatches
+diagnose_reflection_mismatch()           # Reflection artifact diagnosis
+diagnose_mobile_risks()                  # Comprehensive mobile GPU risk check
 ```
 
 For lower-level inspection, all granular tools remain available:
 
 ```
-set_event(142)                       # Navigate to a draw call
-├── get_pipeline_state()             # Inspect rasterizer/blend/depth
-├── get_shader_bindings("pixel")     # Check what textures/buffers are bound
-├── get_cbuffer_contents("pixel", 0) # Read shader constants
-└── save_texture(id, "rt.png")       # Export a specific texture
+set_event(142)                                    # Navigate to a draw call
+├── get_pipeline_state()                          # Inspect rasterizer/blend/depth
+├── get_shader_bindings("pixel")                  # Check what textures/buffers are bound
+├── get_cbuffer_contents("pixel", 0, filter="ibl") # Read shader constants (filterable)
+├── disassemble_shader("pixel", search="SampleSH") # Shader code with context search
+└── save_texture(id, "rt.png")                    # Export a specific texture
 ```
 
 ## Tools
@@ -146,14 +163,14 @@ set_event(142)                       # Navigate to a draw call
 |------|-------------|
 | `open_capture` | Open a `.rdc` file (auto-closes previous) |
 | `close_capture` | Close current capture and free resources |
-| `get_capture_info` | Capture metadata: API, action count, resource counts |
+| `get_capture_info` | Capture metadata: API, action count, resolution, **known_gpu_quirks** (Adreno/Mali/PowerVR/Apple) |
 | `get_frame_overview` | **Frame-level statistics**: action counts by type, texture/buffer memory, render targets, resolution |
 
 ### Event Navigation (5)
 
 | Tool | Description |
 |------|-------------|
-| `list_actions` | List the draw call / action tree with depth control |
+| `list_actions` | List the draw call / action tree — supports `filter` (name substring) and `event_type` (draw/clear/copy…) |
 | `get_action` | Full detail for a single action |
 | `set_event` | Navigate to an event (**required** before pipeline queries) |
 | `search_actions` | Search by name pattern and/or action flags |
@@ -177,14 +194,15 @@ set_event(142)                       # Navigate to a draw call
 | `list_resources` | All named resources (filterable by type, name pattern) |
 | `get_resource_usage` | Which events read/write a resource |
 
-### Data Extraction (7)
+### Data Extraction (8)
 
 | Tool | Description |
 |------|-------------|
 | `save_texture` | Export to PNG, JPG, BMP, TGA, HDR, EXR, or DDS |
 | `get_buffer_data` | Read buffer bytes (hex dump or float32 array) |
 | `pick_pixel` | RGBA value at a coordinate |
-| `get_texture_stats` | Per-channel min/max |
+| `get_texture_stats` | Per-channel min/max/avg with **anomaly detection** (NaN/Inf/negative); supports `all_slices` for cubemaps |
+| `read_texture_pixels` | Read a rectangular region of pixels (up to 64×64) with per-pixel anomaly flags |
 | `export_draw_textures` | **Batch export** all textures bound to a draw call (auto-names, skips placeholders) |
 | `save_render_target` | **Save RT snapshot** at an event (color + optional depth) |
 | `export_mesh` | **Export mesh as OBJ** with positions, normals, UVs from post-VS data |
@@ -193,18 +211,38 @@ set_event(142)                       # Navigate to a draw call
 
 | Tool | Description |
 |------|-------------|
-| `disassemble_shader` | Shader disassembly with **auto fallback chain** (tries all targets, falls back to reflection) |
+| `disassemble_shader` | Shader disassembly with **auto fallback chain**; supports `search` (keyword + context) and `line_range` |
 | `get_shader_reflection` | Input/output signatures, resource binding layout |
-| `get_cbuffer_contents` | Actual constant buffer variable values |
+| `get_cbuffer_contents` | Actual constant buffer variable values; supports `filter` for variable name substring |
 
-### Advanced (4)
+### Advanced (6)
 
 | Tool | Description |
 |------|-------------|
 | `pixel_history` | Full per-pixel modification history across all events |
 | `get_post_vs_data` | Post-transform vertex data (VS out / GS out) |
-| `diff_draw_calls` | **Compare two draw calls** — shows only state differences |
+| `diff_draw_calls` | **Compare two draw calls** — shows state differences with human-readable implications |
 | `analyze_render_passes` | **Auto-detect render pass boundaries** by Clear/RT switches, summarize each pass |
+| `sample_pixel_region` | **Uniform-grid scan** of an RT region — detects NaN/Inf/negative/overexposed hotspots |
+| `debug_shader_at_pixel` | **Per-pixel shader debug** — returns variable trace or pixel value + shader info as fallback |
+
+### Performance Analysis (4)
+
+| Tool | Description |
+|------|-------------|
+| `get_pass_timing` | Most expensive render passes — uses GPU counters if available, falls back to triangle-count heuristic |
+| `analyze_overdraw` | Overdraw estimate per render target group |
+| `analyze_bandwidth` | Write/read bandwidth estimate per render target |
+| `analyze_state_changes` | Finds redundant state-change patterns and batching opportunities |
+
+### Diagnostics (4)
+
+| Tool | Description |
+|------|-------------|
+| `diagnose_negative_values` | Scans all float RTs for negative/NaN/Inf — finds first event introducing them, detects TAA accumulation |
+| `diagnose_precision_issues` | Checks R11G11B10 sign-bit loss, shallow depth buffers, SRGB/linear mismatches |
+| `diagnose_reflection_mismatch` | Compares reflection passes against main scene draws — finds shader/blend/format causes |
+| `diagnose_mobile_risks` | Comprehensive check across precision / performance / compatibility / GPU-specific risk categories |
 
 ## Prompts
 
@@ -214,7 +252,8 @@ Built-in prompt templates to guide AI through common workflows:
 |--------|-------------|
 | `debug_draw_call` | Deep-dive a single draw call: pipeline → shaders → cbuffers → outputs |
 | `find_rendering_issue` | Systematic diagnosis from a problem description |
-| `analyze_performance` | Frame-wide perf analysis: draw call count, overdraw, wasted work |
+| `analyze_performance` | Frame-wide perf analysis: pass timing, overdraw, bandwidth, state changes |
+| `diagnose_flash_artifact` | Step-by-step diagnosis for screen flash / temporal artifacts (爆闪) on mobile GPUs |
 
 ## How It Works
 
@@ -239,17 +278,19 @@ python -m pytest tests/ -v
 
 # Project structure
 src/renderdoc_mcp/
-├── server.py              # FastMCP server, prompt definitions
-├── session.py             # Capture lifecycle, resource caches (singleton)
-├── util.py                # Serialization, enum maps, blend formula, module loader
+├── server.py                 # FastMCP server, 4 prompt definitions
+├── session.py                # Capture lifecycle, resource/texture caches (singleton)
+├── util.py                   # Serialization, enum maps, blend formula, module loader
 └── tools/
-    ├── session_tools.py   # open/close/info + get_frame_overview
-    ├── event_tools.py     # list/get/set/search actions + find_draws
-    ├── pipeline_tools.py  # pipeline state, shader bindings, vertex inputs + get_draw_call_state
-    ├── resource_tools.py  # texture/buffer/resource enumeration
-    ├── data_tools.py      # texture save, buffer read, pixel pick + export_draw_textures, save_render_target, export_mesh
-    ├── shader_tools.py    # disassembly (with fallback chain), reflection, cbuffer contents
-    └── advanced_tools.py  # pixel history, post-VS data + diff_draw_calls, analyze_render_passes
+    ├── session_tools.py      # open/close/info (GPU quirks) + get_frame_overview
+    ├── event_tools.py        # list/get/set/search actions + find_draws
+    ├── pipeline_tools.py     # pipeline state, shader bindings, vertex inputs + get_draw_call_state
+    ├── resource_tools.py     # texture/buffer/resource enumeration
+    ├── data_tools.py         # save/read/pick/stats + read_texture_pixels + export_draw_textures, save_render_target, export_mesh
+    ├── shader_tools.py       # disassembly (fallback chain, search), reflection, cbuffer contents (filter)
+    ├── advanced_tools.py     # pixel history, post-VS data + diff_draw_calls (implications), analyze_render_passes, sample_pixel_region, debug_shader_at_pixel
+    ├── performance_tools.py  # get_pass_timing, analyze_overdraw, analyze_bandwidth, analyze_state_changes
+    └── diagnostic_tools.py  # diagnose_negative_values, diagnose_precision_issues, diagnose_reflection_mismatch, diagnose_mobile_risks
 ```
 
 ## License

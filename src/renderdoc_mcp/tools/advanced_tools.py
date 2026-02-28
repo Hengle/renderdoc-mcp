@@ -1,7 +1,9 @@
-"""Advanced tools: pixel_history, get_post_vs_data, diff_draw_calls, analyze_render_passes."""
+"""Advanced tools: pixel_history, get_post_vs_data, diff_draw_calls, analyze_render_passes,
+sample_pixel_region, debug_shader_at_pixel."""
 
 from __future__ import annotations
 
+import math
 import struct
 from typing import Optional
 
@@ -14,10 +16,330 @@ from renderdoc_mcp.util import (
     make_error,
     flags_to_list,
     MESH_DATA_STAGE_MAP,
+    serialize_shader_variable,
+    SHADER_STAGE_MAP,
 )
 
 
 def register(mcp: FastMCP):
+
+    @mcp.tool()
+    def sample_pixel_region(
+        event_id: Optional[int] = None,
+        resource_id: Optional[str] = None,
+        region: Optional[dict] = None,
+        sample_count: int = 256,
+        anomaly_threshold: float = 10.0,
+    ) -> str:
+        """Batch-sample pixels from a render target and auto-detect anomalies.
+
+        Scans for NaN / Inf / negative values and extreme-bright pixels.
+        Best tool for locating the source of screen flashes (爆闪) and IBL negative values.
+
+        Args:
+            event_id: Sample at this event's render target state. Uses current event if omitted.
+            resource_id: Specific render target resource ID. If omitted, uses the first
+                         color output of the current event.
+            region: Optional sampling region {"x":0,"y":0,"width":W,"height":H}.
+                    If omitted, samples the full texture uniformly.
+            sample_count: Number of sample points (default 256, max 1024).
+            anomaly_threshold: Pixels with any channel exceeding this value are flagged
+                               as extreme-bright (useful for HDR targets). Default 10.0.
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+        err = session.ensure_event(event_id)
+        if err:
+            return to_json(err)
+
+        # Resolve render target
+        if resource_id is not None:
+            tex_id = session.resolve_resource_id(resource_id)
+            if tex_id is None:
+                return to_json(make_error(f"Resource '{resource_id}' not found", "INVALID_RESOURCE_ID"))
+            tex_desc = session.get_texture_desc(resource_id)
+        else:
+            state = session.controller.GetPipelineState()
+            try:
+                outputs = state.GetOutputTargets()
+                color_target = next((o for o in outputs if int(o.resource) != 0), None)
+            except Exception:
+                color_target = None
+            if color_target is None:
+                return to_json(make_error("No color render target at current event", "API_ERROR"))
+            rid_str = str(color_target.resource)
+            tex_id = session.resolve_resource_id(rid_str)
+            tex_desc = session.get_texture_desc(rid_str)
+            resource_id = rid_str
+
+        if tex_desc is None:
+            return to_json(make_error("Could not get texture description", "API_ERROR"))
+
+        # Determine sampling region
+        tex_w, tex_h = tex_desc.width, tex_desc.height
+        if region:
+            rx = max(0, region.get("x", 0))
+            ry = max(0, region.get("y", 0))
+            rw = min(region.get("width", tex_w), tex_w - rx)
+            rh = min(region.get("height", tex_h), tex_h - ry)
+        else:
+            rx, ry, rw, rh = 0, 0, tex_w, tex_h
+
+        sample_count = min(sample_count, 1024)
+
+        # Generate a uniform grid of sample points
+        import math as _math
+        cols = max(1, int(_math.sqrt(sample_count * rw / max(rh, 1))))
+        rows = max(1, sample_count // cols)
+        step_x = max(1, rw // cols)
+        step_y = max(1, rh // rows)
+
+        sample_points: list[tuple[int, int]] = []
+        for r in range(rows):
+            for c in range(cols):
+                px = rx + c * step_x + step_x // 2
+                py = ry + r * step_y + step_y // 2
+                if px < rx + rw and py < ry + rh:
+                    sample_points.append((px, py))
+
+        nan_count = inf_count = neg_count = bright_count = 0
+        hotspots: list[dict] = []
+        values_r: list[float] = []
+        values_g: list[float] = []
+        values_b: list[float] = []
+
+        for px, py in sample_points:
+            try:
+                val = session.controller.PickPixel(
+                    tex_id, px, py, rd.Subresource(0, 0, 0), rd.CompType.Typeless
+                )
+                r, g, b = val.floatValue[0], val.floatValue[1], val.floatValue[2]
+            except Exception:
+                continue
+
+            pixel = [round(r, 6), round(g, 6), round(b, 6)]
+            anomaly_type: str | None = None
+
+            if any(_math.isnan(v) for v in [r, g, b]):
+                nan_count += 1
+                anomaly_type = "NaN"
+            elif any(_math.isinf(v) for v in [r, g, b]):
+                inf_count += 1
+                anomaly_type = "Inf"
+                pixel = ["+Inf" if _math.isinf(v) and v > 0 else ("-Inf" if _math.isinf(v) else v) for v in pixel]
+            elif any(v < 0 for v in [r, g, b]):
+                neg_count += 1
+                anomaly_type = "negative"
+            elif max(r, g, b) > anomaly_threshold:
+                bright_count += 1
+                anomaly_type = "extreme_bright"
+
+            if anomaly_type:
+                hotspots.append({"pixel": [px, py], "value": pixel, "type": anomaly_type})
+
+            if not _math.isnan(r) and not _math.isinf(r):
+                values_r.append(r)
+                values_g.append(g)
+                values_b.append(b)
+
+        total = len(sample_points)
+        anomaly_total = nan_count + inf_count + neg_count + bright_count
+
+        stats: dict = {}
+        for ch, vals in [("r", values_r), ("g", values_g), ("b", values_b)]:
+            if vals:
+                stats[ch] = {
+                    "min": round(min(vals), 6),
+                    "max": round(max(vals), 6),
+                    "mean": round(sum(vals) / len(vals), 6),
+                }
+
+        # Limit hotspots returned
+        MAX_HOTSPOTS = 20
+        hotspots_out = hotspots[:MAX_HOTSPOTS]
+
+        # Build diagnosis hint
+        hints: list[str] = []
+        if inf_count > 0:
+            hints.append(f"Inf 像素 {inf_count} 个——典型爆闪根源，建议对这些像素执行 pixel_history")
+        if neg_count > 0:
+            hints.append(f"负值像素 {neg_count} 个——可能来自 IBL SH 采样或 HDR 溢出，建议检查写入该 RT 的 draw call")
+        if nan_count > 0:
+            hints.append(f"NaN 像素 {nan_count} 个——通常由除以零或 0/0 运算引起")
+        if bright_count > 0:
+            hints.append(f"极亮像素 {bright_count} 个（>{anomaly_threshold}）——可能溢出或曝光异常")
+
+        result = {
+            "resource_id": resource_id,
+            "render_target": f"{tex_desc.name or resource_id} ({tex_desc.format.Name()}) {tex_w}x{tex_h}",
+            "total_samples": total,
+            "anomalies": {
+                "nan_count": nan_count,
+                "inf_count": inf_count,
+                "negative_count": neg_count,
+                "extreme_bright_count": bright_count,
+                "anomaly_total": anomaly_total,
+                "anomaly_rate": f"{anomaly_total / max(total, 1) * 100:.1f}%",
+            },
+            "hotspots": hotspots_out,
+            "statistics": stats,
+        }
+        if hints:
+            result["diagnosis_hint"] = " | ".join(hints)
+        return to_json(result)
+
+    @mcp.tool()
+    def debug_shader_at_pixel(
+        event_id: int,
+        pixel_x: int,
+        pixel_y: int,
+        stage: str = "pixel",
+        watch_variables: Optional[list[str]] = None,
+    ) -> str:
+        """Debug the shader at a specific pixel using RenderDoc's shader debugger.
+
+        Executes the shader for the given pixel and returns intermediate variable
+        values at each step. Useful for tracing negative values, IBL computation
+        errors, TAA artifacts, and other precision issues.
+
+        Note: Shader debugging may not be supported for all API/GPU combinations.
+        If unsupported, falls back to reporting pixel value and bound shader info.
+
+        Args:
+            event_id: The event ID of the draw call.
+            pixel_x: X coordinate (render target space, origin top-left).
+            pixel_y: Y coordinate.
+            stage: Shader stage to debug: "pixel" (default) or "vertex".
+            watch_variables: Optional list of variable names to focus on
+                             (e.g. ["color", "iblDiffuse", "exposure"]).
+                             If omitted, all variables are returned (may be large).
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+        err = session.set_event(event_id)
+        if err:
+            return to_json(err)
+
+        stage_enum = SHADER_STAGE_MAP.get(stage.lower())
+        if stage_enum is None:
+            return to_json(make_error(f"Unknown shader stage: {stage}", "API_ERROR"))
+
+        state = session.controller.GetPipelineState()
+        refl = state.GetShaderReflection(stage_enum)
+        if refl is None:
+            return to_json(make_error(f"No shader bound at stage '{stage}'", "API_ERROR"))
+
+        # Collect pixel value before debugging
+        pixel_val_info: dict = {}
+        try:
+            outputs = state.GetOutputTargets()
+            if outputs:
+                first_rt = next((o for o in outputs if int(o.resource) != 0), None)
+                if first_rt:
+                    rt_id = first_rt.resource
+                    pv = session.controller.PickPixel(
+                        rt_id, pixel_x, pixel_y,
+                        rd.Subresource(0, 0, 0), rd.CompType.Typeless
+                    )
+                    pixel_val_info = {
+                        "current_pixel_rgba": [
+                            round(pv.floatValue[0], 6), round(pv.floatValue[1], 6),
+                            round(pv.floatValue[2], 6), round(pv.floatValue[3], 6),
+                        ],
+                    }
+                    r, g, b = pv.floatValue[0], pv.floatValue[1], pv.floatValue[2]
+                    anomalies = []
+                    if any(math.isnan(v) for v in [r, g, b]):
+                        anomalies.append("NaN detected in output pixel")
+                    if any(math.isinf(v) for v in [r, g, b]):
+                        anomalies.append("Inf detected in output pixel")
+                    if any(v < 0 for v in [r, g, b]):
+                        anomalies.append(f"Negative value in output: [{r:.4f}, {g:.4f}, {b:.4f}]")
+                    if anomalies:
+                        pixel_val_info["pixel_anomalies"] = anomalies
+        except Exception:
+            pass
+
+        # Attempt shader debugging
+        trace_result: dict | None = None
+        debug_error: str | None = None
+        try:
+            if stage_enum == rd.ShaderStage.Pixel:
+                shader_debug = session.controller.DebugPixel(
+                    pixel_x, pixel_y,
+                    rd.DebugPixelInputs(),
+                )
+            else:
+                shader_debug = None
+
+            if shader_debug is not None and hasattr(shader_debug, "states") and shader_debug.states:
+                states = shader_debug.states
+                steps: list[dict] = []
+
+                for step_state in states:
+                    step: dict = {}
+                    # Try to get changed variables at this step
+                    try:
+                        changed = []
+                        if hasattr(step_state, "locals"):
+                            for var in step_state.locals:
+                                vname = var.name
+                                if watch_variables and not any(w.lower() in vname.lower() for w in watch_variables):
+                                    continue
+                                sv = serialize_shader_variable(var)
+                                # Annotate anomalies
+                                val = sv.get("value", [])
+                                if isinstance(val, list):
+                                    flat = [v for v in val if isinstance(v, (int, float))]
+                                    if any(math.isnan(v) for v in flat):
+                                        sv["warning"] = f"⚠️ {vname} 包含 NaN"
+                                    elif any(math.isinf(v) for v in flat):
+                                        sv["warning"] = f"⚠️ {vname} 包含 Inf"
+                                    elif any(v < 0 for v in flat):
+                                        sv["warning"] = f"⚠️ {vname} 包含负值: {flat}"
+                                changed.append(sv)
+                        if changed:
+                            step["variables"] = changed
+                    except Exception:
+                        pass
+
+                    if step:
+                        steps.append(step)
+
+                trace_result = {
+                    "steps_with_changes": len(steps),
+                    "trace": steps[:200],  # cap output
+                }
+            else:
+                debug_error = "DebugPixel returned no trace data (may not be supported for this API/GPU)"
+        except Exception as e:
+            debug_error = f"Shader debugging failed: {type(e).__name__}: {e}"
+
+        result: dict = {
+            "event_id": event_id,
+            "pixel": [pixel_x, pixel_y],
+            "stage": stage,
+            "shader_resource_id": str(refl.resourceId),
+            "entry_point": refl.entryPoint,
+        }
+        result.update(pixel_val_info)
+
+        if trace_result is not None:
+            result["debug_trace"] = trace_result
+        else:
+            result["debug_note"] = debug_error or "Shader trace unavailable"
+            result["fallback_info"] = {
+                "constant_blocks": [cb.name for cb in refl.constantBlocks],
+                "read_only_resources": [r.name for r in refl.readOnlyResources],
+                "suggestion": "Use get_cbuffer_contents and pixel_history for manual investigation",
+            }
+
+        return to_json(result)
+
     @mcp.tool()
     def pixel_history(
         resource_id: str,
@@ -226,13 +548,18 @@ def register(mcp: FastMCP):
         if "error" in state2:
             return to_json(state2)
 
-        diff = _diff_dicts(state1, state2)
+        raw_diff = _diff_dicts(state1, state2)
+        differences = _add_implications(raw_diff)
 
         return to_json({
             "eid1": eid1,
             "eid2": eid2,
-            "differences": diff,
-            "identical": len(diff) == 0,
+            "differences": differences,
+            "identical": len(differences) == 0,
+            "summary": (
+                f"发现 {len(differences)} 处差异" if differences
+                else "两个 draw call 的 pipeline state 完全相同"
+            ),
         })
 
     @mcp.tool()
@@ -353,3 +680,52 @@ def _diff_dicts(d1: dict, d2: dict, path: str = "") -> dict:
             diff[key] = {"eid1": v1, "eid2": v2}
 
     return diff
+
+
+# ── Implication rules for diff_draw_calls ──
+# Each entry: (field_path_suffix, implication_template)
+_DIFF_IMPLICATIONS: list[tuple[str, str]] = [
+    ("blend.enabled",   "Blend toggle: {v1}→{v2}。{'透明度混合激活，颜色会与背景混合叠加' if v2 else '关闭 blend，输出将直接覆盖目标像素（不透明模式）'}"),
+    ("blend.color_src", "颜色源混合因子: {v1}→{v2}。可能导致输出颜色亮度/透明度变化"),
+    ("blend.color_dst", "颜色目标混合因子: {v1}→{v2}。影响背景色在最终结果中的权重"),
+    ("blend.color_op",  "颜色混合运算: {v1}→{v2}。运算方式改变可能导致颜色整体偏移"),
+    ("blend.alpha_src", "Alpha 源混合因子: {v1}→{v2}"),
+    ("depth.test",      "深度测试: {v1}→{v2}。{'关闭后物体可能穿透其他几何体' if not v2 else '开启后需要确保深度 buffer 正确初始化'}"),
+    ("depth.write",     "深度写入: {v1}→{v2}。{'关闭后该 draw call 不更新深度 buffer，适用于透明物体' if not v2 else '开启后会更新深度值'}"),
+    ("depth.func",      "深度比较函数: {v1}→{v2}。可能导致物体遮挡关系或消失问题"),
+    ("stencil.enabled", "模板测试: {v1}→{v2}"),
+    ("rasterizer.cull", "剔除模式: {v1}→{v2}。可能影响背面/正面可见性，倒影 pass 通常需要反转 cull"),
+    ("rasterizer.front_ccw", "正面朝向: {v1}→{v2}。CCW/CW 切换后背面剔除方向翻转"),
+    ("topology",        "图元拓扑: {v1}→{v2}"),
+]
+
+
+def _add_implications(diff: dict) -> list[dict]:
+    """Flatten a nested diff dict into a list with implication annotations."""
+    results: list[dict] = []
+
+    def _flatten(d: dict, path: str):
+        for key, val in d.items():
+            key_path = f"{path}.{key}" if path else key
+            if isinstance(val, dict):
+                if "eid1" in val or "eid2" in val:
+                    v1 = val.get("eid1")
+                    v2 = val.get("eid2")
+                    entry: dict = {"field": key_path, "eid1": v1, "eid2": v2}
+                    # Try to find an implication
+                    for suffix, template in _DIFF_IMPLICATIONS:
+                        if key_path.endswith(suffix):
+                            try:
+                                entry["implication"] = eval(
+                                    f'f"""{template}"""',
+                                    {"v1": v1, "v2": v2},
+                                )
+                            except Exception:
+                                entry["implication"] = template.replace("{v1}", str(v1)).replace("{v2}", str(v2))
+                            break
+                    results.append(entry)
+                else:
+                    _flatten(val, key_path)
+
+    _flatten(diff, "")
+    return results

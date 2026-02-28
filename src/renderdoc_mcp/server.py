@@ -15,6 +15,8 @@ from renderdoc_mcp.tools import (
     data_tools,
     shader_tools,
     advanced_tools,
+    performance_tools,
+    diagnostic_tools,
 )
 
 mcp = FastMCP(
@@ -31,6 +33,8 @@ resource_tools.register(mcp)
 data_tools.register(mcp)
 shader_tools.register(mcp)
 advanced_tools.register(mcp)
+performance_tools.register(mcp)
+diagnostic_tools.register(mcp)
 
 
 # ── Prompts ──
@@ -69,20 +73,20 @@ def find_rendering_issue(description: str) -> str:
 
 Investigate step by step:
 
-1. First, call `list_actions` to get an overview of the frame structure.
-2. Use `search_actions` to find draw calls related to the issue:
-   - Search by name if the user mentioned specific objects/passes
-   - Filter by flags (Drawcall, Clear, etc.) to narrow down
-3. For suspicious draw calls, use `set_event` + `get_pipeline_state` to check:
-   - Is depth testing configured correctly? (depth_enable, depth_function, depth_write_mask)
-   - Is blending set up properly? (enabled, source/dest factors)
-   - Is culling correct? (cull_mode, front_ccw)
-   - Are scissors/viewports reasonable?
-4. Check shader bindings with `get_shader_bindings` — are all expected resources bound?
-5. Use `get_cbuffer_contents` to verify shader parameters (transforms, colors, etc.)
-6. Use `save_texture` on render targets to visualize intermediate results.
-7. If overdraw is suspected, use `pixel_history` on affected pixels.
-8. Summarize the root cause and suggest fixes."""
+1. First call `get_capture_info` to check GPU/driver and known_gpu_quirks.
+2. Call `list_actions` (use filter= or event_type= to narrow down) to find relevant passes.
+3. For suspected draw calls use `get_draw_call_state` for a one-shot overview.
+4. Deepen with `get_pipeline_state` — check depth, blend, cull, viewports.
+5. Check shader bindings with `get_shader_bindings`; read constants with `get_cbuffer_contents`
+   (use filter= to focus on specific variables like "ibl", "exposure", "taa").
+6. Use `disassemble_shader` with search= to find relevant code (e.g. search="SampleSH").
+7. For color/lighting anomalies:
+   - `sample_pixel_region` to scan the RT for NaN/Inf/negative values
+   - `pixel_history` on suspicious pixels to trace all writes
+   - `debug_shader_at_pixel` on an anomalous pixel for step-by-step trace
+8. For reflection issues: `diagnose_reflection_mismatch` and `diff_draw_calls`
+9. For negative-value / flash issues: `diagnose_negative_values`
+10. Summarize root cause with fix suggestions."""
 
 
 @mcp.prompt()
@@ -90,25 +94,40 @@ def analyze_performance() -> str:
     """Performance analysis workflow for a captured frame."""
     return """Analyze the frame for performance issues:
 
-1. Call `list_actions` with max_depth=1 to get a high-level view of the frame structure.
-2. Call `search_actions` with flags=["Drawcall"] to count total draw calls.
-3. Look for performance red flags:
-   a. Search for draw calls with very high vertex counts (numIndices)
-   b. Search for redundant Clear operations
-   c. Look for draw calls with zero outputs (wasted work)
-4. For the most expensive-looking draw calls:
-   a. Check `get_pipeline_state` — are there unnecessary state changes?
-   b. Check `get_vertex_inputs` — are vertex formats optimal?
-   c. Check render target sizes with `list_textures`
-5. Use `list_textures` to identify:
-   - Very large textures that could be optimized
-   - Unused textures (cross-reference with `get_resource_usage`)
-6. Use `list_buffers` to find oversized buffers
-7. Summarize findings with actionable optimization recommendations:
-   - Draw call batching opportunities
-   - Texture/buffer size optimizations
-   - Redundant state changes
-   - Potential overdraw issues"""
+1. Call `get_capture_info` to check GPU/driver and known quirks.
+2. Call `get_frame_overview` for draw count, clear count, RT list.
+3. Call `get_pass_timing` (granularity="pass") to find the most expensive passes.
+4. Call `analyze_overdraw` to check fill-rate pressure.
+5. Call `analyze_bandwidth` to estimate memory bandwidth.
+6. Call `analyze_state_changes` to find draw call batching opportunities.
+7. Call `diagnose_mobile_risks` with check_categories=["performance","precision","compatibility"]
+   for a prioritized risk list.
+8. For the most expensive pass:
+   a. `get_pipeline_state` — unnecessary state?
+   b. `get_vertex_inputs` — vertex format optimality?
+   c. `list_textures` — oversized textures?
+9. Summarize with actionable optimizations ranked by impact."""
+
+
+@mcp.prompt()
+def diagnose_flash_artifact() -> str:
+    """Diagnose screen flash / temporal artifacts (爆闪) on mobile GPUs."""
+    return """Diagnose screen flash (爆闪) or temporal rendering artifact:
+
+1. `get_capture_info` — check GPU model and known_gpu_quirks (R11G11B10, mediump, etc.)
+2. `diagnose_negative_values` — scan all float RTs for negative/NaN/Inf values.
+   This one call will identify the affected RT, first event that introduced negatives,
+   and whether TAA/temporal is amplifying them.
+3. If negatives found in SceneColor:
+   a. `sample_pixel_region` on the SceneColor RT to locate exact hotspot pixels
+   b. `pixel_history` on a hotspot pixel to trace all draw calls that wrote to it
+   c. `disassemble_shader` with search="SH" or search="ibl" on the culprit event
+   d. `debug_shader_at_pixel` on the hotspot for step-by-step variable trace
+4. If TAA/temporal buffer has negatives > SceneColor negatives:
+   a. `get_cbuffer_contents` on the TAA pass (filter="weight" or "blend" or "feedback")
+   b. `disassemble_shader` on TAA pixel shader with search="history" or search="clamp"
+5. `diagnose_precision_issues` — check R11G11B10 format limitations
+6. Summarize root cause and provide targeted fix."""
 
 
 # ── Cleanup ──

@@ -10,6 +10,41 @@ from renderdoc_mcp.session import get_session
 from renderdoc_mcp.util import rd, to_json, make_error, flags_to_list
 
 
+def _get_gpu_quirks(driver_name: str) -> list[str]:
+    """Return known GPU/API quirks based on the driver name string."""
+    quirks: list[str] = []
+    name_upper = driver_name.upper()
+
+    if "ADRENO" in name_upper:
+        quirks.extend([
+            "Adreno: mediump float 实际精度可能低于 spec 要求，关键计算建议强制 highp",
+            "Adreno: R11G11B10_FLOAT 没有符号位，写入负值会被 clamp 到 0 或产生未定义行为",
+            "Adreno: 某些驱动版本 textureLod 在 fragment shader 中存在 bug",
+        ])
+    elif "MALI" in name_upper:
+        quirks.extend([
+            "Mali: R11G11B10_FLOAT 存储负值行为未定义",
+            "Mali: 大量 discard 指令会导致 early-Z 失效，影响 tile-based 性能",
+            "Mali: 某些型号 mediump 向量运算累积精度问题",
+        ])
+    elif "POWERVR" in name_upper or "IMAGINATION" in name_upper:
+        quirks.extend([
+            "PowerVR: Tile-based deferred rendering，避免不必要的 framebuffer load/store",
+            "PowerVR: 避免大量纹理采样器绑定",
+        ])
+    elif "APPLE" in name_upper:
+        quirks.extend([
+            "Apple GPU: High-efficiency TBDR，注意 tile memory 带宽",
+            "Apple: float16 在 Metal 上性能优秀，建议用于后处理",
+        ])
+
+    if "OPENGL ES" in name_upper or "GLES" in name_upper:
+        quirks.append("OpenGL ES: 注意精度限定符 (highp/mediump/lowp) 的正确使用")
+        quirks.append("OpenGL ES: 扩展依赖需检查 GL_EXTENSIONS 兼容性")
+
+    return quirks
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     def open_capture(filepath: str) -> str:
@@ -36,7 +71,8 @@ def register(mcp: FastMCP):
     def get_capture_info() -> str:
         """Get information about the currently open capture.
 
-        Returns API type, file path, action count, texture/buffer counts.
+        Returns API type, file path, action count, texture/buffer counts,
+        and known GPU quirks based on the detected driver/GPU.
         """
         session = get_session()
         err = session.require_open()
@@ -47,12 +83,35 @@ def register(mcp: FastMCP):
         textures = controller.GetTextures()
         buffers = controller.GetBuffers()
 
+        driver_name = session.driver_name
+
+        # Detect resolution from most-used render target
+        rt_draw_counts: dict[str, int] = {}
+        for _eid, action in session.action_map.items():
+            if action.flags & rd.ActionFlags.Drawcall:
+                for o in action.outputs:
+                    if int(o) != 0:
+                        key = str(o)
+                        rt_draw_counts[key] = rt_draw_counts.get(key, 0) + 1
+        resolution = "unknown"
+        main_color_format = "unknown"
+        if rt_draw_counts:
+            top_rid = max(rt_draw_counts, key=lambda k: rt_draw_counts[k])
+            tex_desc = session.get_texture_desc(top_rid)
+            if tex_desc is not None:
+                resolution = f"{tex_desc.width}x{tex_desc.height}"
+                main_color_format = str(tex_desc.format.Name())
+
         info = {
             "filepath": session.filepath,
+            "api": driver_name,
+            "resolution": resolution,
+            "main_color_format": main_color_format,
             "total_actions": len(session.action_map),
             "textures": len(textures),
             "buffers": len(buffers),
             "current_event": session.current_event,
+            "known_gpu_quirks": _get_gpu_quirks(driver_name),
         }
         return to_json(info)
 

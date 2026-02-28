@@ -18,38 +18,77 @@ from renderdoc_mcp.util import (
     SHADER_STAGE_MAP,
 )
 
+# Map event_type string → ActionFlags mask
+_EVENT_TYPE_MAP: dict[str, int] = {
+    "draw": int(rd.ActionFlags.Drawcall),
+    "dispatch": int(rd.ActionFlags.Dispatch),
+    "clear": int(rd.ActionFlags.Clear),
+    "copy": int(rd.ActionFlags.Copy),
+    "resolve": int(rd.ActionFlags.Resolve),
+}
+
 
 def register(mcp: FastMCP):
     @mcp.tool()
-    def list_actions(max_depth: int = 2, filter_flags: Optional[list[str]] = None) -> str:
+    def list_actions(
+        max_depth: int = 2,
+        filter_flags: Optional[list[str]] = None,
+        filter: Optional[str] = None,
+        event_type: Optional[str] = None,
+    ) -> str:
         """List the draw call / action tree of the current capture.
 
         Args:
             max_depth: Maximum depth to recurse into children (default 2).
             filter_flags: Optional list of ActionFlags names to filter by (e.g. ["Drawcall", "Clear"]).
                          Only actions matching ANY of these flags are included.
+            filter: Case-insensitive substring to match against action names
+                    (e.g. "shadow", "taa", "bloom", "reflection").
+            event_type: Shorthand type filter: "draw", "dispatch", "clear", "copy", "resolve".
+                        Overrides filter_flags if both are provided.
         """
         session = get_session()
         err = session.require_open()
         if err:
             return to_json(err)
 
+        # Resolve event_type shorthand first (overrides filter_flags)
+        if event_type is not None:
+            et = event_type.lower()
+            if et != "all":
+                type_mask = _EVENT_TYPE_MAP.get(et)
+                if type_mask is None:
+                    return to_json(make_error(
+                        f"Unknown event_type: {event_type}. Valid: all, {', '.join(_EVENT_TYPE_MAP)}",
+                        "API_ERROR",
+                    ))
+                filter_flags = None  # event_type takes precedence
+            else:
+                type_mask = 0
+        else:
+            type_mask = 0
+
         # Resolve flag filter
-        flag_mask = 0
-        if filter_flags:
+        flag_mask = type_mask
+        if not type_mask and filter_flags:
             for name in filter_flags:
                 val = getattr(rd.ActionFlags, name, None)
                 if val is None:
                     return to_json(make_error(f"Unknown ActionFlag: {name}", "API_ERROR"))
                 flag_mask |= val
 
+        # Compile name filter
+        name_filter = filter.lower() if filter else None
+
         sf = session.structured_file
         root_actions = session.get_root_actions()
 
         def should_include(action) -> bool:
-            if flag_mask == 0:
-                return True
-            return bool(action.flags & flag_mask)
+            if flag_mask and not (action.flags & flag_mask):
+                return False
+            if name_filter and name_filter not in action.GetName(sf).lower():
+                return False
+            return True
 
         def serialize_filtered(action, depth: int) -> dict | None:
             included = should_include(action)
@@ -60,7 +99,6 @@ def register(mcp: FastMCP):
                     if child is not None:
                         children.append(child)
 
-            # Include this node if it matches or has matching children
             if not included and not children:
                 return None
 
@@ -77,7 +115,8 @@ def register(mcp: FastMCP):
                 result["children_count"] = len(action.children)
             return result
 
-        if flag_mask:
+        needs_filter = bool(flag_mask or name_filter)
+        if needs_filter:
             actions = []
             for a in root_actions:
                 r = serialize_filtered(a, 0)

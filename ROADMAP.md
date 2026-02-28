@@ -3,6 +3,8 @@
 > 基于一次完整的 RDC 逆向分析实战（王者荣耀水晶尾巴材质）暴露的痛点，整理的改进计划。
 >
 > **v0.2.0 更新**: 13 个痛点中已完成 11 个（问题 2-7, 9-13），新增 8 个工具（23→31），详见下方 ✅ 标记。
+>
+> **v0.3.0 更新**: 基于工具设计文档对比补全——新增 11 个工具（31→42），新增 2 个模块（performance_tools, diagnostic_tools），新增 1 个 prompt（diagnose_flash_artifact），多个现有工具增强，详见下方 v0.3 标记。
 
 ---
 
@@ -372,20 +374,57 @@ find_draws(
 
 ---
 
-## 四、完整工具清单 (31 tools)
+## 三-B、v0.3.0 新增与增强
+
+### 工具增强（已有工具新增参数）
+
+| 工具 | 新增能力 | 版本 |
+|------|----------|------|
+| `get_capture_info` | 返回 `api`, `resolution`, `main_color_format`, `known_gpu_quirks`（自动识别 Adreno/Mali/PowerVR/Apple 坑点） | **v0.3** |
+| `list_actions` | 新增 `filter`（名称子串过滤）和 `event_type`（draw/dispatch/clear/copy/resolve） | **v0.3** |
+| `disassemble_shader` | 新增 `search`（关键词 + ±5 行上下文）和 `line_range`（行范围切片） | **v0.3** |
+| `get_cbuffer_contents` | 新增 `filter`（变量名子串过滤，支持嵌套结构体） | **v0.3** |
+| `get_texture_stats` | 新增 `all_slices`（遍历所有 mip/cubemap 面），新增异常检测（NaN/Inf/negative warnings） | **v0.3** |
+| `diff_draw_calls` | 返回扁平 `differences` 列表，每项附 `implication`（对渲染的影响说明） | **v0.3** |
+
+### 新工具
+
+| 工具 | 模块 | 说明 | 版本 |
+|------|------|------|------|
+| `read_texture_pixels` | data_tools | 读取矩形区域像素（最大 64×64），含逐像素异常标记 | **v0.3** |
+| `sample_pixel_region` | advanced_tools | 均匀网格采样 RT 区域，检测 NaN/Inf/负值/过亮热点 | **v0.3** |
+| `debug_shader_at_pixel` | advanced_tools | 逐像素 shader 调试（DebugPixel），不支持时 fallback 返回像素值+反射信息 | **v0.3** |
+| `get_pass_timing` | performance_tools | 最耗时 render pass，使用 GPU 计数器或三角形数量启发式估算 | **v0.3** |
+| `analyze_overdraw` | performance_tools | 按 RT 分组估算 overdraw | **v0.3** |
+| `analyze_bandwidth` | performance_tools | 估算每 RT 的写入/读取带宽 | **v0.3** |
+| `analyze_state_changes` | performance_tools | 查找冗余状态切换和 draw call 合批机会 | **v0.3** |
+| `diagnose_negative_values` | diagnostic_tools | 扫描所有浮点 RT 中的负值/NaN/Inf，定位首次引入事件，检测 TAA 累积 | **v0.3** |
+| `diagnose_precision_issues` | diagnostic_tools | 检查 R11G11B10 符号位缺失、浅深度缓冲、SRGB/线性空间不匹配 | **v0.3** |
+| `diagnose_reflection_mismatch` | diagnostic_tools | 对比反射 pass 与主场景 draw，报告 shader/blend/RT 格式差异原因 | **v0.3** |
+| `diagnose_mobile_risks` | diagnostic_tools | 全面检查精度/性能/兼容性/GPU 特定风险，返回排优先级的风险列表 | **v0.3** |
+
+### 新 Prompt
+
+| Prompt | 说明 | 版本 |
+|--------|------|------|
+| `diagnose_flash_artifact` | 逐步诊断屏幕爆闪/时域渲染 artifact，专门针对手机 GPU | **v0.3** |
+
+---
+
+## 四、完整工具清单 (42 tools)
 
 ### Session (4)
 | 工具 | 说明 | 版本 |
 |------|------|------|
 | `open_capture` | 打开 RDC 文件 | v0.1 |
 | `close_capture` | 关闭当前捕获 | v0.1 |
-| `get_capture_info` | 获取捕获基本信息 | v0.1 |
+| `get_capture_info` | 捕获基本信息 + GPU 坑点自动识别 | v0.1 (**v0.3 增强**) |
 | `get_frame_overview` | 帧级别统计：action 分类计数、纹理/缓冲区内存、RT、分辨率 | **v0.2** |
 
 ### Events (5)
 | 工具 | 说明 | 版本 |
 |------|------|------|
-| `list_actions` | 列出 action 树 | v0.1 |
+| `list_actions` | 列出 action 树（支持 filter/event_type 过滤） | v0.1 (**v0.3 增强**) |
 | `get_action` | 获取单个 action 详情 | v0.1 |
 | `set_event` | 跳转到指定 event | v0.1 |
 | `search_actions` | 按名称/flag 搜索 | v0.1 |
@@ -407,13 +446,14 @@ find_draws(
 | `list_resources` | 列出所有命名资源 | v0.1 |
 | `get_resource_usage` | 获取资源使用记录 | v0.1 |
 
-### Data (7)
+### Data (8)
 | 工具 | 说明 | 版本 |
 |------|------|------|
 | `save_texture` | 保存纹理到文件 | v0.1 |
 | `get_buffer_data` | 读取缓冲区数据 | v0.1 |
 | `pick_pixel` | 拾取像素值 | v0.1 |
-| `get_texture_stats` | 获取纹理统计 | v0.1 |
+| `get_texture_stats` | 纹理统计 + 异常检测（NaN/Inf/negative），支持 all_slices | v0.1 (**v0.3 增强**) |
+| `read_texture_pixels` | 读取矩形区域像素（最大 64×64），含逐像素异常标记 | **v0.3** |
 | `export_draw_textures` | 批量导出 draw call 所有绑定纹理 | **v0.2** |
 | `save_render_target` | 保存当前 RT 快照（color + 可选 depth） | **v0.2** |
 | `export_mesh` | 导出 mesh 为 OBJ（position/normal/uv） | **v0.2** |
@@ -421,17 +461,35 @@ find_draws(
 ### Shaders (3)
 | 工具 | 说明 | 版本 |
 |------|------|------|
-| `disassemble_shader` | 反编译 shader（自动 fallback 链 + reflection 兜底） | v0.1 (v0.2 增强) |
+| `disassemble_shader` | 反编译 shader（自动 fallback 链 + reflection 兜底），支持 search/line_range | v0.1 (**v0.3 增强**) |
 | `get_shader_reflection` | 获取 shader 反射信息 | v0.1 |
-| `get_cbuffer_contents` | 读取常量缓冲区 | v0.1 |
+| `get_cbuffer_contents` | 读取常量缓冲区（支持 filter 变量过滤） | v0.1 (**v0.3 增强**) |
 
-### Advanced (4)
+### Advanced (6)
 | 工具 | 说明 | 版本 |
 |------|------|------|
 | `pixel_history` | 像素历史（已修复 passed 字段 bug） | v0.1 (v0.2 修复) |
 | `get_post_vs_data` | 获取 VS 输出数据 | v0.1 |
-| `diff_draw_calls` | 对比两个 draw call 的状态差异 | **v0.2** |
+| `diff_draw_calls` | 对比两个 draw call 状态差异，附 implication 说明 | v0.2 (**v0.3 增强**) |
 | `analyze_render_passes` | 自动检测 render pass 边界并汇总 | **v0.2** |
+| `sample_pixel_region` | 均匀网格采样 RT 区域，检测 NaN/Inf/负值/过亮热点 | **v0.3** |
+| `debug_shader_at_pixel` | 逐像素 shader 调试，不支持时 fallback 返回像素值+反射信息 | **v0.3** |
+
+### Performance (4)
+| 工具 | 说明 | 版本 |
+|------|------|------|
+| `get_pass_timing` | 最耗时 render pass（GPU 计数器 / 三角形数量启发式估算） | **v0.3** |
+| `analyze_overdraw` | 按 RT 分组估算 overdraw | **v0.3** |
+| `analyze_bandwidth` | 估算每 RT 的写入/读取带宽 | **v0.3** |
+| `analyze_state_changes` | 查找冗余状态切换和 draw call 合批机会 | **v0.3** |
+
+### Diagnostics (4)
+| 工具 | 说明 | 版本 |
+|------|------|------|
+| `diagnose_negative_values` | 扫描浮点 RT 中的负值/NaN/Inf，定位首次引入事件，检测 TAA 累积 | **v0.3** |
+| `diagnose_precision_issues` | 检查 R11G11B10 符号位缺失、浅深度缓冲、SRGB/线性空间不匹配 | **v0.3** |
+| `diagnose_reflection_mismatch` | 对比反射 pass 与主场景，报告 shader/blend/RT 格式差异原因 | **v0.3** |
+| `diagnose_mobile_risks` | 全面检查精度/性能/兼容性/GPU 特定风险，返回排优先级风险列表 | **v0.3** |
 
 ---
 
@@ -440,5 +498,6 @@ find_draws(
 | # | 改进 | 说明 |
 |---|------|------|
 | 1 | User 级别配置说明 + 安装脚本 | README 中推荐 `~/.claude/settings.json` 配置 |
-| 7 (部分) | GL/GLES 原始 GLSL 源码提取 | 从 structured file 中提取 |
+| 7 (部分) | GL/GLES 原始 GLSL 源码提取 | 从 structured file 中提取原始 GLSL source |
 | 8 | Uniform 值读取修复 | 适配多版本 API，新增 `get_uniform_values()` 高层工具 |
+| 新 | tests/test_util.py 扩展 | 为 performance_tools / diagnostic_tools 添加 mock 测试 |

@@ -40,6 +40,8 @@ def register(mcp: FastMCP):
         stage: str,
         target: Optional[str] = None,
         event_id: Optional[int] = None,
+        line_range: Optional[list[int]] = None,
+        search: Optional[str] = None,
     ) -> str:
         """Disassemble the shader bound at the specified stage.
 
@@ -50,6 +52,9 @@ def register(mcp: FastMCP):
             stage: Shader stage (vertex, hull, domain, geometry, pixel, compute).
             target: Disassembly target/format. If omitted, tries all available targets.
             event_id: Optional event ID to navigate to first.
+            line_range: [start_line, end_line] (1-based). Only return lines in this range.
+            search: Keyword to search in the disassembly. Returns matching lines with
+                    5 lines of context before and after each match.
         """
         session = get_session()
         err = session.require_open()
@@ -75,42 +80,79 @@ def register(mcp: FastMCP):
         targets = session.controller.GetDisassemblyTargets(True)
 
         if not targets:
-            # No disassembly available — fallback to reflection
             return to_json(_reflection_fallback(stage, refl))
 
+        disasm: str | None = None
+        used_target: str | None = None
+
         if target is not None:
-            # User specified a target
             if target not in targets:
                 return to_json(make_error(
                     f"Unknown disassembly target: {target}. Available: {targets}", "API_ERROR"
                 ))
             disasm = session.controller.DisassembleShader(pipe, refl, target)
-            return to_json({
-                "stage": stage,
-                "target": target,
-                "available_targets": list(targets),
-                "source_type": "disasm",
-                "disassembly": disasm,
-            })
+            used_target = target
+        else:
+            for t in targets:
+                try:
+                    d = session.controller.DisassembleShader(pipe, refl, t)
+                    if d and d.strip():
+                        disasm = d
+                        used_target = t
+                        break
+                except Exception:
+                    continue
 
-        # Try each target in order
-        for t in targets:
-            try:
-                disasm = session.controller.DisassembleShader(pipe, refl, t)
-                if disasm and disasm.strip():
-                    return to_json({
-                        "stage": stage,
-                        "target": t,
-                        "available_targets": list(targets),
-                        "source_type": "disasm",
-                        "disassembly": disasm,
-                    })
-            except Exception:
-                continue
+        if not disasm:
+            result = _reflection_fallback(stage, refl)
+            result["available_targets"] = list(targets)
+            return to_json(result)
 
-        # All targets failed — fallback to reflection
-        result = _reflection_fallback(stage, refl)
-        result["available_targets"] = list(targets)
+        # Apply line_range filter
+        all_lines = disasm.splitlines()
+        total_lines = len(all_lines)
+
+        if line_range is not None and len(line_range) == 2:
+            start = max(1, line_range[0]) - 1  # convert to 0-based
+            end = min(total_lines, line_range[1])
+            filtered_lines = all_lines[start:end]
+            disasm_out = "\n".join(filtered_lines)
+            note = f"Showing lines {start+1}–{end} of {total_lines}"
+        elif search is not None:
+            kw = search.lower()
+            context = 5
+            include: set[int] = set()
+            for i, line in enumerate(all_lines):
+                if kw in line.lower():
+                    for j in range(max(0, i - context), min(total_lines, i + context + 1)):
+                        include.add(j)
+            if not include:
+                note = f"No matches for '{search}' in {total_lines} lines"
+                disasm_out = ""
+            else:
+                result_lines = []
+                prev = -2
+                for i in sorted(include):
+                    if i > prev + 1:
+                        result_lines.append("...")
+                    result_lines.append(f"{i+1:4d}: {all_lines[i]}")
+                    prev = i
+                disasm_out = "\n".join(result_lines)
+                note = f"Found '{search}' in {total_lines} total lines"
+        else:
+            disasm_out = disasm
+            note = None
+
+        result: dict = {
+            "stage": stage,
+            "target": used_target,
+            "available_targets": list(targets),
+            "source_type": "disasm",
+            "total_lines": total_lines,
+            "disassembly": disasm_out,
+        }
+        if note:
+            result["note"] = note
         return to_json(result)
 
     @mcp.tool()
@@ -201,6 +243,7 @@ def register(mcp: FastMCP):
         stage: str,
         cbuffer_index: int,
         event_id: Optional[int] = None,
+        filter: Optional[str] = None,
     ) -> str:
         """Get the actual values of a constant buffer at the specified shader stage.
 
@@ -210,6 +253,9 @@ def register(mcp: FastMCP):
             stage: Shader stage (vertex, hull, domain, geometry, pixel, compute).
             cbuffer_index: Index of the constant buffer (from get_shader_reflection).
             event_id: Optional event ID to navigate to first.
+            filter: Case-insensitive substring to match variable names
+                    (e.g. "ibl", "exposure", "taa", "reflection"). Only matching
+                    variables are returned.
         """
         session = get_session()
         err = session.require_open()
@@ -254,9 +300,25 @@ def register(mcp: FastMCP):
 
         variables = [serialize_shader_variable(v) for v in cbuffer_vars]
 
+        # Apply variable name filter
+        if filter:
+            kw = filter.lower()
+
+            def _var_matches(var: dict) -> bool:
+                if kw in var.get("name", "").lower():
+                    return True
+                for m in var.get("members", []):
+                    if _var_matches(m):
+                        return True
+                return False
+
+            variables = [v for v in variables if _var_matches(v)]
+
         return to_json({
             "stage": stage,
             "cbuffer_index": cbuffer_index,
             "cbuffer_name": refl.constantBlocks[cbuffer_index].name,
+            "filter": filter,
             "variables": variables,
+            "variable_count": len(variables),
         })
