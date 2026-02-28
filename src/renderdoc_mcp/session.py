@@ -111,7 +111,7 @@ class RenderDocSession:
 
         return {
             "filepath": filepath,
-            "api": str(cap.APIVersion()),
+            "api": cap.DriverName(),
             "total_actions": len(self._action_map),
             "root_actions": len(root_actions),
             "textures": len(textures),

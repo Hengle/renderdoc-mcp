@@ -147,7 +147,7 @@ def register(mcp: FastMCP):
 
         result = {
             "filepath": session.filepath,
-            "api": str(session._cap.APIVersion()) if session._cap else "unknown",
+            "api": session._cap.DriverName() if session._cap else "unknown",
             "resolution": resolution,
             "total_actions": len(session._action_map),
             "draw_calls": draw_calls,
