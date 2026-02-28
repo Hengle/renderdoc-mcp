@@ -86,7 +86,7 @@ def register(mcp: FastMCP):
         else:
             actions = [serialize_action(a, sf, max_depth=max_depth) for a in root_actions]
 
-        return to_json({"actions": actions, "total": len(session._action_map)})
+        return to_json({"actions": actions, "total": len(session.action_map)})
 
     @mcp.tool()
     def get_action(event_id: int) -> str:
@@ -162,7 +162,7 @@ def register(mcp: FastMCP):
         sf = session.structured_file
         results = []
 
-        for eid, action in sorted(session._action_map.items()):
+        for eid, action in sorted(session.action_map.items()):
             if flag_mask and not (action.flags & flag_mask):
                 continue
             action_name = action.GetName(sf)
@@ -207,11 +207,11 @@ def register(mcp: FastMCP):
         results = []
         saved_event = session.current_event
 
-        for eid in sorted(session._action_map.keys()):
+        for eid in sorted(session.action_map.keys()):
             if len(results) >= max_results:
                 break
 
-            action = session._action_map[eid]
+            action = session.action_map[eid]
             if not (action.flags & rd.ActionFlags.Drawcall):
                 continue
 

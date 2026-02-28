@@ -49,7 +49,7 @@ def register(mcp: FastMCP):
 
         info = {
             "filepath": session.filepath,
-            "total_actions": len(session._action_map),
+            "total_actions": len(session.action_map),
             "textures": len(textures),
             "buffers": len(buffers),
             "current_event": session.current_event,
@@ -74,7 +74,7 @@ def register(mcp: FastMCP):
         draw_calls = 0
         clears = 0
         dispatches = 0
-        for _eid, action in session._action_map.items():
+        for _eid, action in session.action_map.items():
             if action.flags & rd.ActionFlags.Drawcall:
                 draw_calls += 1
             if action.flags & rd.ActionFlags.Clear:
@@ -121,7 +121,7 @@ def register(mcp: FastMCP):
 
         # Detect render targets and their draw counts
         rt_draw_counts: dict[str, int] = {}
-        for _eid, action in sorted(session._action_map.items()):
+        for _eid, action in sorted(session.action_map.items()):
             if not (action.flags & rd.ActionFlags.Drawcall):
                 continue
             for o in action.outputs:
@@ -147,9 +147,9 @@ def register(mcp: FastMCP):
 
         result = {
             "filepath": session.filepath,
-            "api": session._cap.DriverName() if session._cap else "unknown",
+            "api": session.driver_name,
             "resolution": resolution,
-            "total_actions": len(session._action_map),
+            "total_actions": len(session.action_map),
             "draw_calls": draw_calls,
             "clears": clears,
             "dispatches": dispatches,

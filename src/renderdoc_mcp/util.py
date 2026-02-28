@@ -199,12 +199,6 @@ def make_error(message: str, code: str = "API_ERROR") -> dict:
     return {"error": message, "code": code}
 
 
-def result_or_raise(result, message: str = "RenderDoc API call failed"):
-    """Check a ResultCode and raise RuntimeError on failure."""
-    if result != rd.ResultCode.Succeeded:
-        raise RuntimeError(f"{message}: {result}")
-
-
 # ── ActionFlags helpers ──
 
 _ACTION_FLAG_NAMES: dict[int, str] | None = None

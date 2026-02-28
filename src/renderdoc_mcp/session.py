@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from renderdoc_mcp.util import rd, result_or_raise, make_error
+from renderdoc_mcp.util import rd, make_error
 
 
 class RenderDocSession:
@@ -46,6 +46,16 @@ class RenderDocSession:
     @property
     def current_event(self) -> int | None:
         return self._current_event
+
+    @property
+    def driver_name(self) -> str:
+        """Get the API/driver name of the current capture."""
+        return self._cap.DriverName() if self._cap else "unknown"
+
+    @property
+    def action_map(self) -> dict[int, object]:
+        """Get the event_id -> ActionDescription mapping."""
+        return self._action_map
 
     def require_open(self) -> dict | None:
         """Return an error dict if no capture is open, else None."""

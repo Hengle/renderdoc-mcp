@@ -252,8 +252,8 @@ def register(mcp: FastMCP):
         current_pass: dict | None = None
         last_outputs: tuple | None = None
 
-        for eid in sorted(session._action_map.keys()):
-            action = session._action_map[eid]
+        for eid in sorted(session.action_map.keys()):
+            action = session.action_map[eid]
             is_clear = bool(action.flags & rd.ActionFlags.Clear)
             is_draw = bool(action.flags & rd.ActionFlags.Drawcall)
 
