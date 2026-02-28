@@ -1,0 +1,171 @@
+"""Event navigation tools: list_actions, get_action, set_event, search_actions."""
+
+from __future__ import annotations
+
+import re
+from typing import Optional
+
+from mcp.server.fastmcp import FastMCP
+
+from renderdoc_mcp.session import get_session
+from renderdoc_mcp.util import (
+    rd,
+    to_json,
+    serialize_action,
+    serialize_action_detail,
+    flags_to_list,
+    make_error,
+)
+
+
+def register(mcp: FastMCP):
+    @mcp.tool()
+    def list_actions(max_depth: int = 2, filter_flags: Optional[list[str]] = None) -> str:
+        """List the draw call / action tree of the current capture.
+
+        Args:
+            max_depth: Maximum depth to recurse into children (default 2).
+            filter_flags: Optional list of ActionFlags names to filter by (e.g. ["Drawcall", "Clear"]).
+                         Only actions matching ANY of these flags are included.
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        # Resolve flag filter
+        flag_mask = 0
+        if filter_flags:
+            for name in filter_flags:
+                val = getattr(rd.ActionFlags, name, None)
+                if val is None:
+                    return to_json(make_error(f"Unknown ActionFlag: {name}", "API_ERROR"))
+                flag_mask |= val
+
+        sf = session.structured_file
+        root_actions = session.get_root_actions()
+
+        def should_include(action) -> bool:
+            if flag_mask == 0:
+                return True
+            return bool(action.flags & flag_mask)
+
+        def serialize_filtered(action, depth: int) -> dict | None:
+            included = should_include(action)
+            children = []
+            if depth < max_depth and len(action.children) > 0:
+                for c in action.children:
+                    child = serialize_filtered(c, depth + 1)
+                    if child is not None:
+                        children.append(child)
+
+            # Include this node if it matches or has matching children
+            if not included and not children:
+                return None
+
+            result = {
+                "event_id": action.eventId,
+                "name": action.GetName(sf),
+                "flags": flags_to_list(action.flags),
+            }
+            if action.numIndices > 0:
+                result["num_indices"] = action.numIndices
+            if children:
+                result["children"] = children
+            elif depth >= max_depth and len(action.children) > 0:
+                result["children_count"] = len(action.children)
+            return result
+
+        if flag_mask:
+            actions = []
+            for a in root_actions:
+                r = serialize_filtered(a, 0)
+                if r is not None:
+                    actions.append(r)
+        else:
+            actions = [serialize_action(a, sf, max_depth=max_depth) for a in root_actions]
+
+        return to_json({"actions": actions, "total": len(session._action_map)})
+
+    @mcp.tool()
+    def get_action(event_id: int) -> str:
+        """Get detailed information about a specific action/draw call.
+
+        Args:
+            event_id: The event ID of the action to inspect.
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        action = session.get_action(event_id)
+        if action is None:
+            return to_json(make_error(f"Event ID {event_id} not found", "INVALID_EVENT_ID"))
+
+        return to_json(serialize_action_detail(action, session.structured_file))
+
+    @mcp.tool()
+    def set_event(event_id: int) -> str:
+        """Navigate the replay to a specific event ID.
+
+        This must be called before inspecting pipeline state, shader bindings, etc.
+        Subsequent queries will reflect the state at this event.
+
+        Args:
+            event_id: The event ID to navigate to.
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        err = session.set_event(event_id)
+        if err:
+            return to_json(err)
+
+        action = session.get_action(event_id)
+        name = action.GetName(session.structured_file) if action else "unknown"
+        return to_json({"status": "ok", "event_id": event_id, "name": name})
+
+    @mcp.tool()
+    def search_actions(
+        name_pattern: Optional[str] = None,
+        flags: Optional[list[str]] = None,
+    ) -> str:
+        """Search for actions by name pattern and/or flags.
+
+        Args:
+            name_pattern: Regex pattern to match action names (case-insensitive).
+            flags: List of ActionFlags names; actions matching ANY flag are included.
+        """
+        session = get_session()
+        err = session.require_open()
+        if err:
+            return to_json(err)
+
+        flag_mask = 0
+        if flags:
+            for name in flags:
+                val = getattr(rd.ActionFlags, name, None)
+                if val is None:
+                    return to_json(make_error(f"Unknown ActionFlag: {name}", "API_ERROR"))
+                flag_mask |= val
+
+        pattern = re.compile(name_pattern, re.IGNORECASE) if name_pattern else None
+        sf = session.structured_file
+        results = []
+
+        for eid, action in sorted(session._action_map.items()):
+            if flag_mask and not (action.flags & flag_mask):
+                continue
+            action_name = action.GetName(sf)
+            if pattern and not pattern.search(action_name):
+                continue
+            results.append({
+                "event_id": eid,
+                "name": action_name,
+                "flags": flags_to_list(action.flags),
+            })
+
+        return to_json({"matches": results, "count": len(results)})
