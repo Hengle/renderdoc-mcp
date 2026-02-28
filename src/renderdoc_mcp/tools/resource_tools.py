@@ -80,7 +80,12 @@ def register(mcp: FastMCP):
             return to_json(err)
 
         resources = session.controller.GetResources()
-        pattern = re.compile(name_pattern, re.IGNORECASE) if name_pattern else None
+        pattern = None
+        if name_pattern:
+            try:
+                pattern = re.compile(name_pattern, re.IGNORECASE)
+            except re.error as e:
+                return to_json(make_error(f"Invalid regex pattern: {e}", "API_ERROR"))
         results = []
 
         for res in resources:
