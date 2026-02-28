@@ -236,63 +236,82 @@ def register(mcp: FastMCP):
                 cbs.append({"index": i, "name": cb_refl.name, "error": "failed to read binding"})
         bindings["constant_buffers"] = cbs
 
-        # Read-only resources (SRVs)
+        # Read-only resources (SRVs) - fetch all at once, match by access.index
         ros = []
+        try:
+            all_ro_binds = state.GetReadOnlyResources(stage_enum)
+            # Build lookup: reflection index -> list of descriptors
+            ro_by_index: dict = {}
+            for b in all_ro_binds:
+                ro_by_index.setdefault(b.access.index, []).append(b)
+        except Exception as e:
+            all_ro_binds = None
+            ro_error = f"{type(e).__name__}: {e}"
+
         for i, ro_refl in enumerate(refl.readOnlyResources):
-            try:
-                ro_bind = state.GetReadOnlyResources(stage_enum, i, False)
-                entries = []
-                for b in ro_bind:
-                    entries.append({
-                        "resource_id": str(b.descriptor.resource),
-                    })
-                ros.append({
-                    "index": i,
-                    "name": ro_refl.name,
-                    "type": str(ro_refl.textureType),
-                    "bindings": entries,
-                })
-            except Exception:
-                ros.append({"index": i, "name": ro_refl.name, "error": "failed to read binding"})
+            if all_ro_binds is None:
+                ros.append({"index": i, "name": ro_refl.name, "error": f"failed to read bindings: {ro_error}"})
+                continue
+            entries = []
+            for b in ro_by_index.get(i, []):
+                entries.append({"resource_id": str(b.descriptor.resource)})
+            ros.append({
+                "index": i,
+                "name": ro_refl.name,
+                "type": str(ro_refl.textureType),
+                "bindings": entries,
+            })
         bindings["read_only_resources"] = ros
 
         # Read-write resources (UAVs)
         rws = []
+        try:
+            all_rw_binds = state.GetReadWriteResources(stage_enum)
+            rw_by_index: dict = {}
+            for b in all_rw_binds:
+                rw_by_index.setdefault(b.access.index, []).append(b)
+        except Exception as e:
+            all_rw_binds = None
+            rw_error = f"{type(e).__name__}: {e}"
+
         for i, rw_refl in enumerate(refl.readWriteResources):
-            try:
-                rw_bind = state.GetReadWriteResources(stage_enum, i, False)
-                entries = []
-                for b in rw_bind:
-                    entries.append({
-                        "resource_id": str(b.descriptor.resource),
-                    })
-                rws.append({
-                    "index": i,
-                    "name": rw_refl.name,
-                    "type": str(rw_refl.textureType),
-                    "bindings": entries,
-                })
-            except Exception:
-                rws.append({"index": i, "name": rw_refl.name, "error": "failed to read binding"})
+            if all_rw_binds is None:
+                rws.append({"index": i, "name": rw_refl.name, "error": f"failed to read bindings: {rw_error}"})
+                continue
+            entries = []
+            for b in rw_by_index.get(i, []):
+                entries.append({"resource_id": str(b.descriptor.resource)})
+            rws.append({
+                "index": i,
+                "name": rw_refl.name,
+                "type": str(rw_refl.textureType),
+                "bindings": entries,
+            })
         bindings["read_write_resources"] = rws
 
         # Samplers
         samplers = []
+        try:
+            all_sampler_binds = state.GetSamplers(stage_enum)
+            s_by_index: dict = {}
+            for b in all_sampler_binds:
+                s_by_index.setdefault(b.access.index, []).append(b)
+        except Exception as e:
+            all_sampler_binds = None
+            s_error = f"{type(e).__name__}: {e}"
+
         for i, s_refl in enumerate(refl.samplers):
-            try:
-                s_bind = state.GetSamplers(stage_enum, i, False)
-                entries = []
-                for b in s_bind:
-                    entries.append({
-                        "resource_id": str(b.descriptor.resource),
-                    })
-                samplers.append({
-                    "index": i,
-                    "name": s_refl.name,
-                    "bindings": entries,
-                })
-            except Exception:
-                samplers.append({"index": i, "name": s_refl.name, "error": "failed to read binding"})
+            if all_sampler_binds is None:
+                samplers.append({"index": i, "name": s_refl.name, "error": f"failed to read bindings: {s_error}"})
+                continue
+            entries = []
+            for b in s_by_index.get(i, []):
+                entries.append({"resource_id": str(b.descriptor.resource)})
+            samplers.append({
+                "index": i,
+                "name": s_refl.name,
+                "bindings": entries,
+            })
         bindings["samplers"] = samplers
 
         return to_json(bindings)
@@ -468,23 +487,23 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
     try:
         ps_refl = state.GetShaderReflection(rd.ShaderStage.Pixel)
         if ps_refl is not None:
+            all_ro = state.GetReadOnlyResources(rd.ShaderStage.Pixel)
+            ro_by_index: dict = {}
+            for b in all_ro:
+                ro_by_index.setdefault(b.access.index, []).append(b)
             for i, ro_refl in enumerate(ps_refl.readOnlyResources):
-                try:
-                    ro_bind = state.GetReadOnlyResources(rd.ShaderStage.Pixel, i, False)
-                    for b in ro_bind:
-                        rid_str = str(b.descriptor.resource)
-                        tex_desc = session.get_texture_desc(rid_str)
-                        tex_entry: dict = {
-                            "slot": i,
-                            "name": ro_refl.name,
-                            "resource_id": rid_str,
-                        }
-                        if tex_desc is not None:
-                            tex_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
-                            tex_entry["format"] = str(tex_desc.format.Name())
-                        textures.append(tex_entry)
-                except Exception:
-                    pass
+                for b in ro_by_index.get(i, []):
+                    rid_str = str(b.descriptor.resource)
+                    tex_desc = session.get_texture_desc(rid_str)
+                    tex_entry: dict = {
+                        "slot": i,
+                        "name": ro_refl.name,
+                        "resource_id": rid_str,
+                    }
+                    if tex_desc is not None:
+                        tex_entry["size"] = f"{tex_desc.width}x{tex_desc.height}"
+                        tex_entry["format"] = str(tex_desc.format.Name())
+                    textures.append(tex_entry)
     except Exception:
         pass
     result["textures"] = textures

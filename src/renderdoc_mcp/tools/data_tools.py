@@ -243,41 +243,45 @@ def register(mcp: FastMCP):
 
         exported = []
         skipped = []
+        try:
+            all_ro = state.GetReadOnlyResources(rd.ShaderStage.Pixel)
+            ro_by_index: dict = {}
+            for b in all_ro:
+                ro_by_index.setdefault(b.access.index, []).append(b)
+        except Exception:
+            ro_by_index = {}
+
         for i, ro_refl in enumerate(ps_refl.readOnlyResources):
-            try:
-                ro_bind = state.GetReadOnlyResources(rd.ShaderStage.Pixel, i, False)
-                for b in ro_bind:
-                    rid_str = str(b.descriptor.resource)
-                    tex_desc = session.get_texture_desc(rid_str)
-                    if tex_desc is None:
-                        continue
+            for b in ro_by_index.get(i, []):
+                rid_str = str(b.descriptor.resource)
+                tex_desc = session.get_texture_desc(rid_str)
+                if tex_desc is None:
+                    continue
 
-                    if skip_small and tex_desc.width <= 4 and tex_desc.height <= 4:
-                        skipped.append({"name": ro_refl.name, "resource_id": rid_str,
-                                        "size": f"{tex_desc.width}x{tex_desc.height}"})
-                        continue
+                if skip_small and tex_desc.width <= 4 and tex_desc.height <= 4:
+                    skipped.append({"name": ro_refl.name, "resource_id": rid_str,
+                                    "size": f"{tex_desc.width}x{tex_desc.height}"})
+                    continue
 
-                    filename = f"{ro_refl.name}_{tex_desc.width}x{tex_desc.height}.png"
-                    # Sanitize filename
-                    filename = filename.replace("/", "_").replace("\\", "_")
-                    out_path = os.path.join(output_dir, filename)
+                filename = f"{ro_refl.name}_{tex_desc.width}x{tex_desc.height}.png"
+                # Sanitize filename
+                filename = filename.replace("/", "_").replace("\\", "_")
+                out_path = os.path.join(output_dir, filename)
 
-                    texsave = rd.TextureSave()
-                    texsave.resourceId = tex_desc.resourceId
-                    texsave.destType = rd.FileType.PNG
-                    texsave.mip = 0
-                    texsave.slice.sliceIndex = 0
-                    texsave.alpha = rd.AlphaMapping.Preserve
-                    session.controller.SaveTexture(texsave, out_path)
+                texsave = rd.TextureSave()
+                texsave.resourceId = tex_desc.resourceId
+                texsave.destType = rd.FileType.PNG
+                texsave.mip = 0
+                texsave.slice.sliceIndex = 0
+                texsave.alpha = rd.AlphaMapping.Preserve
+                session.controller.SaveTexture(texsave, out_path)
 
-                    exported.append({
-                        "name": ro_refl.name,
-                        "resource_id": rid_str,
-                        "size": f"{tex_desc.width}x{tex_desc.height}",
-                        "output_path": out_path,
-                    })
-            except Exception:
-                pass
+                exported.append({
+                    "name": ro_refl.name,
+                    "resource_id": rid_str,
+                    "size": f"{tex_desc.width}x{tex_desc.height}",
+                    "output_path": out_path,
+                })
 
         return to_json({
             "event_id": event_id,

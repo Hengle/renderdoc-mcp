@@ -249,17 +249,14 @@ def register(mcp: FastMCP):
                     found = False
                     ps_refl = state.GetShaderReflection(rd.ShaderStage.Pixel)
                     if ps_refl is not None:
-                        for i, ro_refl in enumerate(ps_refl.readOnlyResources):
-                            try:
-                                ro_bind = state.GetReadOnlyResources(rd.ShaderStage.Pixel, i, False)
-                                for b in ro_bind:
-                                    if str(b.descriptor.resource) == texture_id:
-                                        found = True
-                                        break
-                            except Exception:
-                                pass
-                            if found:
-                                break
+                        try:
+                            all_ro = state.GetReadOnlyResources(rd.ShaderStage.Pixel)
+                            for b in all_ro:
+                                if str(b.descriptor.resource) == texture_id:
+                                    found = True
+                                    break
+                        except Exception:
+                            pass
                     if not found:
                         continue
 
