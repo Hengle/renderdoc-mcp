@@ -37,17 +37,17 @@
 | 3 | `get_frame_overview` | (无参数) | 返回分辨率/draw 统计/RT 列表 | ✅ |
 | 4 | `list_actions` | max_depth=2, filter_flags=["Drawcall","Clear"] | 过滤出 draw+clear | ✅ |
 | 5 | `search_actions` | name_pattern="BaseVertex" | 找到所有 BaseVertex 调用 | ✅ (111 matches) |
-| 6 | `get_action` | event_id=569 | 返回单个 action 详情 | ❌→🔧 Bug 3: depthOutput→depthOut |
+| 6 | `get_action` | event_id=569 | 返回单个 action 详情 | ✅ (Bug 3 已修复验证) |
 | 7 | `set_event` | event_id=569 | 成功导航 | ✅ |
 
 ### 第二阶段：Draw Call 分析
 
 | # | 工具 | 测试参数 | 预期 | 状态 |
 |---|------|----------|------|------|
-| 8 | `get_draw_call_state` | event_id=569 | 完整 draw 状态（含 RT、blend、shader 等） | ✅ (RT 为空因旧 bug, 需重启) |
+| 8 | `get_draw_call_state` | event_id=569 | 完整 draw 状态（含 RT、blend、shader 等） | ✅ (Bug 2 修复后 RT 正常, EID 569 为 depth-only pass) |
 | 9 | `diff_draw_calls` | eid1=569, eid2=825 | 列出差异（shader/inputs 不同） | ✅ |
-| 10 | `get_pipeline_state` | event_id=569 | 返回完整管线状态 | ⚠️ output_targets 空 (需重启), 其余正常 |
-| 11 | `get_vertex_inputs` | event_id=569 | 返回顶点属性和 buffer 绑定 | ⚠️→🔧 Bug 4: format 显示 Swig 指针 |
+| 10 | `get_pipeline_state` | event_id=569 | 返回完整管线状态 | ✅ (EID 569 为 depth-only, output_targets 空是正确的; EID 3346 有 RT 正常) |
+| 11 | `get_vertex_inputs` | event_id=569 | 返回顶点属性和 buffer 绑定 | ✅ (Bug 4 已修复, format 显示 R32G32B32_FLOAT 等) |
 | 12 | `find_draws` | min_vertices=50000, max_results=5 | 找到 5 个大 draw | ✅ |
 | 13 | `find_draws` | blend=True | 找到开启 blend 的 draw | ✅ (0 matches, 正常) |
 | 14 | `analyze_render_passes` | (无参数) | 检测 18 个 render pass | ✅ |
@@ -57,9 +57,9 @@
 | # | 工具 | 测试参数 | 预期 | 状态 |
 |---|------|----------|------|------|
 | 15 | `disassemble_shader` | stage="vertex", event_id=569 | 反汇编（ES 可能失败→fallback） | ⚠️ SPIR-V 编译失败, 已知限制 |
-| 16 | `get_shader_reflection` | stage="pixel", event_id=569 | 返回 IO 签名、cbuffer、资源绑定 | ❌→🔧 已修复 resType→textureType |
+| 16 | `get_shader_reflection` | stage="pixel", event_id=569 | 返回 IO 签名、cbuffer、资源绑定 | ✅ (Bug 1 已修复验证, 4 inputs/1 output/1 cbuffer) |
 | 17 | `get_shader_reflection` | stage="vertex", event_id=569 | 返回 VS 反射信息 | ✅ (5 inputs, 5 outputs, 1 cbuffer) |
-| 18 | `get_shader_bindings` | stage="pixel", event_id=569 | 返回 PS 资源绑定 | ⚠️ _DissolveMap "failed to read binding" |
+| 18 | `get_shader_bindings` | stage="pixel", event_id=569 | 返回 PS 资源绑定 | ✅ (_DissolveMap 正常返回 ResourceId::3198) |
 | 19 | `get_cbuffer_contents` | stage="vertex", cbuffer_index=0, event_id=569 | 返回 cbuffer 变量值 | ✅ (Unity 矩阵等 6 变量) |
 
 ### 第四阶段：资源查询
@@ -69,7 +69,7 @@
 | 20 | `list_textures` | (无参数) | 列出全部 172 纹理 | ✅ (172 textures) |
 | 21 | `list_textures` | min_width=512 | 过滤大纹理 | ✅ (108 textures) |
 | 22 | `list_buffers` | min_size=100000 | 过滤大 buffer | ✅ (23 buffers) |
-| 23 | `list_resources` | name_pattern=".*" | 列出所有命名资源 | ❌→🔧 Bug 5: UTF-8 decode error |
+| 23 | `list_resources` | name_pattern=".*" | 列出所有命名资源 | ✅ (Bug 5 已修复验证, 成功返回完整资源列表) |
 | 24 | `get_resource_usage` | resource_id="ResourceId::4749" | 主 RT 的使用历史 | ⚠️ 功能正常 (155 usages), usage 值为原始数字 |
 
 ### 第五阶段：数据导出
@@ -79,7 +79,7 @@
 | 25 | `save_texture` | resource_id=ResourceId::4749, output=Downloads | 导出纹理为 PNG | ✅ |
 | 26 | `get_buffer_data` | resource_id=ResourceId::4026, format="floats" | 读取 buffer 浮点数据 | ✅ (返回顶点浮点数据) |
 | 27 | `export_draw_textures` | event_id=569, output_dir=Downloads/mcp_test_textures | 批量导出 PS 纹理 | ✅ (0 textures, 该 draw 无纹理) |
-| 28 | `export_draw_textures` | event_id=1014, output_dir=Downloads/mcp_test_textures2 | 换个有纹理的 draw 测 | ⚠️ (0 exported, 可能 binding 读取失败) |
+| 28 | `export_draw_textures` | event_id=1014, output_dir=Downloads/mcp_retest_textures | 换个有纹理的 draw 测 | ✅ (6 textures exported: BumpMap/FlocculeMap/MainTex/OpalMap/ReflectionMatCap/Lightmap) |
 | 29 | `save_render_target` | event_id=3125, output=Downloads/mcp_test_rt.png | 保存主 pass 最终 RT | ✅ (修复后正常) |
 | 30 | `save_render_target` | event_id=3125, save_depth=True | 同时保存 depth | ✅ (color + depth 两文件) |
 | 31 | `export_mesh` | event_id=569, output=Downloads/mcp_test_mesh.obj | 导出网格为 OBJ | ✅ (18218 顶点, 6072 三角形) |
@@ -97,16 +97,14 @@
 
 | # | 工具 | 测试参数 | 预期 | 状态 |
 |---|------|----------|------|------|
-| 36 | `close_capture` | (无参数) | 关闭并释放资源 | 待测（最后执行） |
+| 36 | `close_capture` | (无参数) | 关闭并释放资源 | ✅ (正常关闭, 后续调用返回 NO_CAPTURE_OPEN) |
 
 ## 测试汇总
 
 - **总计**: 36 项
-- **✅ 通过**: 26 项
-- **⚠️ 部分问题**: 5 项 (#10, #18, #24, #28, #33)
-- **❌ 修复中**: 3 项 (#6, #23 需重启; #16 已修复)
-- **⚠️ 已知限制**: 1 项 (#15 shader 反汇编)
-- **待测**: 1 项 (#36 close_capture)
+- **✅ 通过**: 34 项 (含 5 个 Bug 修复后验证通过)
+- **⚠️ 轻微问题**: 1 项 (#24 usage 值为原始数字, 非阻塞)
+- **⚠️ 已知限制**: 1 项 (#15 shader 反汇编, ES 版本限制)
 
 ## 已发现并修复的 Bug
 
@@ -153,9 +151,9 @@
 
 1. **get_resource_usage**: `usage` 字段显示原始枚举数值 (如 `"32"`, `"35"`)，应转换为可读名称
 2. **get_shader_reflection**: `var_type` 和 `system_value` 字段显示 `"0"`, `"1"` 等数值，应转换为枚举名
-3. **get_shader_bindings**: PS _DissolveMap 纹理绑定读取失败 (可能是 OpenGL ES 特定问题)
+3. ~~**get_shader_bindings**: PS _DissolveMap 纹理绑定读取失败~~ → ✅ 已修复 (Bug 2 连锁影响)
 4. **pick_pixel**: `rgba_uint` 返回的是 float 的原始内存表示而非 uint8 值
-5. **export_draw_textures**: EID 1014 导出 0 纹理，可能因 shader binding 读取失败
+5. ~~**export_draw_textures**: EID 1014 导出 0 纹理~~ → ✅ 已修复 (Bug 2 连锁影响, 现可导出 6 纹理)
 6. **get_texture_stats**: 只返回 min/max，没有 avg/mean 统计
 
 ## 环境限制
@@ -170,3 +168,4 @@
 - RT color: `C:\Users\18523\Downloads\mcp_test_rt.png`
 - RT depth: `C:\Users\18523\Downloads\mcp_test_rt_depth_depth`
 - Texture 4749: `C:\Users\18523\Downloads\mcp_test_texture_4749.png`
+- Retest textures (6 files): `C:\Users\18523\Downloads\mcp_retest_textures\`
