@@ -123,8 +123,8 @@ class TestSerializeAction(unittest.TestCase):
         action.numInstances = num_instances
         action.children = children or []
         action.outputs = []
-        action.depthOutput = MagicMock()
-        action.depthOutput.__int__ = lambda self: 0
+        action.depthOut = MagicMock()
+        action.depthOut.__int__ = lambda self: 0
         return action
 
     def setUp(self):

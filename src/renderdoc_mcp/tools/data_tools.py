@@ -316,14 +316,14 @@ def register(mcp: FastMCP):
         outputs = state.GetOutputTargets()
         color_target = None
         for o in outputs:
-            if int(o.resourceId) != 0:
+            if int(o.resource) != 0:
                 color_target = o
                 break
 
         if color_target is None:
             return to_json(make_error("No color render target bound at this event", "API_ERROR"))
 
-        rid_str = str(color_target.resourceId)
+        rid_str = str(color_target.resource)
         tex_desc = session.get_texture_desc(rid_str)
 
         if os.path.isdir(output_path):
@@ -334,7 +334,7 @@ def register(mcp: FastMCP):
             os.makedirs(os.path.dirname(color_path), exist_ok=True)
 
         texsave = rd.TextureSave()
-        texsave.resourceId = color_target.resourceId
+        texsave.resourceId = color_target.resource
         texsave.destType = rd.FileType.PNG
         texsave.mip = 0
         texsave.slice.sliceIndex = 0
@@ -351,8 +351,8 @@ def register(mcp: FastMCP):
         if save_depth:
             try:
                 dt = state.GetDepthTarget()
-                if int(dt.resourceId) != 0:
-                    dt_rid = str(dt.resourceId)
+                if int(dt.resource) != 0:
+                    dt_rid = str(dt.resource)
                     if os.path.isdir(output_path):
                         depth_path = os.path.join(output_path, f"rt_depth_eid{event_id}.png")
                     else:
@@ -360,7 +360,7 @@ def register(mcp: FastMCP):
                         depth_path = f"{base}_depth{ext}"
 
                     texsave = rd.TextureSave()
-                    texsave.resourceId = dt.resourceId
+                    texsave.resourceId = dt.resource
                     texsave.destType = rd.FileType.PNG
                     texsave.mip = 0
                     texsave.slice.sliceIndex = 0

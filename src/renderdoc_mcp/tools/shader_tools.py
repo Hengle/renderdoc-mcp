@@ -27,8 +27,8 @@ def _reflection_fallback(stage: str, refl) -> dict:
         "input_signature": [serialize_sig_element(s) for s in refl.inputSignature],
         "output_signature": [serialize_sig_element(s) for s in refl.outputSignature],
         "constant_blocks": [{"name": cb.name, "byte_size": cb.byteSize} for cb in refl.constantBlocks],
-        "read_only_resources": [{"name": ro.name, "type": str(ro.resType)} for ro in refl.readOnlyResources],
-        "read_write_resources": [{"name": rw.name, "type": str(rw.resType)} for rw in refl.readWriteResources],
+        "read_only_resources": [{"name": ro.name, "type": str(ro.textureType)} for ro in refl.readOnlyResources],
+        "read_write_resources": [{"name": rw.name, "type": str(rw.textureType)} for rw in refl.readWriteResources],
         "note": "Disassembly unavailable — showing reflection data only",
     }
     return result
@@ -167,7 +167,7 @@ def register(mcp: FastMCP):
         for ro in refl.readOnlyResources:
             ros.append({
                 "name": ro.name,
-                "type": str(ro.resType),
+                "type": str(ro.textureType),
                 "bind_point": ro.fixedBindNumber,
             })
         result["read_only_resources"] = ros
@@ -177,7 +177,7 @@ def register(mcp: FastMCP):
         for rw in refl.readWriteResources:
             rws.append({
                 "name": rw.name,
-                "type": str(rw.resType),
+                "type": str(rw.textureType),
                 "bind_point": rw.fixedBindNumber,
             })
         result["read_write_resources"] = rws

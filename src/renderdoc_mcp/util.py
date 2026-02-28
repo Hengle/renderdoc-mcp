@@ -207,9 +207,9 @@ def serialize_action(action, structured_file, depth: int = 0, max_depth: int = 2
             outputs.append(str(o))
     if outputs:
         result["outputs"] = outputs
-    depth_id = int(action.depthOutput)
+    depth_id = int(action.depthOut)
     if depth_id != 0:
-        result["depth_output"] = str(action.depthOutput)
+        result["depth_output"] = str(action.depthOut)
 
     if depth < max_depth and len(action.children) > 0:
         result["children"] = [
@@ -243,8 +243,8 @@ def serialize_action_detail(action, structured_file) -> dict:
             outputs.append(str(o))
     result["outputs"] = outputs
 
-    depth_id = int(action.depthOutput)
-    result["depth_output"] = str(action.depthOutput) if depth_id != 0 else None
+    depth_id = int(action.depthOut)
+    result["depth_output"] = str(action.depthOut) if depth_id != 0 else None
 
     if action.parent:
         result["parent_event_id"] = action.parent.eventId

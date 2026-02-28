@@ -153,15 +153,15 @@ def _serialize_pipeline_state(state) -> dict:
     try:
         outputs = state.GetOutputTargets()
         result["output_targets"] = [
-            {"resource_id": str(o.resourceId)} for o in outputs if int(o.resourceId) != 0
+            {"resource_id": str(o.resource)} for o in outputs if int(o.resource) != 0
         ]
     except Exception:
         pass
 
     try:
         depth = state.GetDepthTarget()
-        if int(depth.resourceId) != 0:
-            result["depth_target"] = {"resource_id": str(depth.resourceId)}
+        if int(depth.resource) != 0:
+            result["depth_target"] = {"resource_id": str(depth.resource)}
     except Exception:
         pass
 
@@ -249,7 +249,7 @@ def register(mcp: FastMCP):
                 ros.append({
                     "index": i,
                     "name": ro_refl.name,
-                    "type": str(ro_refl.resType),
+                    "type": str(ro_refl.textureType),
                     "bindings": entries,
                 })
             except Exception:
@@ -269,7 +269,7 @@ def register(mcp: FastMCP):
                 rws.append({
                     "index": i,
                     "name": rw_refl.name,
-                    "type": str(rw_refl.resType),
+                    "type": str(rw_refl.textureType),
                     "bindings": entries,
                 })
             except Exception:
@@ -347,7 +347,7 @@ def register(mcp: FastMCP):
                 "byte_offset": a.byteOffset,
                 "per_instance": a.perInstance,
                 "instance_rate": a.instanceRate,
-                "format": str(a.format),
+                "format": str(a.format.Name()),
             })
 
         result = {
@@ -494,9 +494,9 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
     try:
         outputs = state.GetOutputTargets()
         for o in outputs:
-            if int(o.resourceId) == 0:
+            if int(o.resource) == 0:
                 continue
-            rid_str = str(o.resourceId)
+            rid_str = str(o.resource)
             rt_entry: dict = {"resource_id": rid_str}
             tex_desc = session.get_texture_desc(rid_str)
             if tex_desc is not None:
@@ -510,8 +510,8 @@ def _get_draw_state_dict(session, event_id: int) -> dict:
     # Depth target
     try:
         dt = state.GetDepthTarget()
-        if int(dt.resourceId) != 0:
-            rid_str = str(dt.resourceId)
+        if int(dt.resource) != 0:
+            rid_str = str(dt.resource)
             dt_entry: dict = {"resource_id": rid_str}
             tex_desc = session.get_texture_desc(rid_str)
             if tex_desc is not None:
