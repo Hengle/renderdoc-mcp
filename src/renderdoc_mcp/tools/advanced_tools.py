@@ -139,7 +139,7 @@ def register(mcp: FastMCP):
             if anomaly_type:
                 hotspots.append({"pixel": [px, py], "value": pixel, "type": anomaly_type})
 
-            if not _math.isnan(r) and not _math.isinf(r):
+            if not any(_math.isnan(v) or _math.isinf(v) for v in [r, g, b]):
                 values_r.append(r)
                 values_g.append(g)
                 values_b.append(b)
@@ -173,7 +173,7 @@ def register(mcp: FastMCP):
 
         result = {
             "resource_id": resource_id,
-            "render_target": f"{tex_desc.name or resource_id} ({tex_desc.format.Name()}) {tex_w}x{tex_h}",
+            "render_target": f"{getattr(tex_desc, 'name', None) or resource_id} ({tex_desc.format.Name()}) {tex_w}x{tex_h}",
             "total_samples": total,
             "anomalies": {
                 "nan_count": nan_count,
@@ -479,11 +479,17 @@ def register(mcp: FastMCP):
         if stage.lower() == "vsin":
             # For vertex input, use vertex input attributes
             attrs = state.GetVertexInputs()
-            attr_info = [{"name": a.name, "format": str(a.format)} for a in attrs]
+            attr_info = [{"name": a.name, "format": str(a.format.Name())} for a in attrs]
         else:
-            vs_refl = state.GetShaderReflection(rd.ShaderStage.Vertex)
+            # Use the appropriate shader stage reflection for output signature
+            refl_stage = rd.ShaderStage.Vertex
+            if stage.lower() == "gsout":
+                gs_refl = state.GetShaderReflection(rd.ShaderStage.Geometry)
+                if gs_refl is not None:
+                    refl_stage = rd.ShaderStage.Geometry
+            vs_refl = state.GetShaderReflection(refl_stage)
             if vs_refl is None:
-                return to_json(make_error("No vertex shader bound", "API_ERROR"))
+                return to_json(make_error("No shader bound for requested stage", "API_ERROR"))
             attr_info = []
             for sig in vs_refl.outputSignature:
                 name = sig.semanticIdxName if sig.varName == "" else sig.varName
@@ -504,6 +510,11 @@ def register(mcp: FastMCP):
         # Parse vertices as float arrays
         vertices = []
         floats_per_vertex = postvs.vertexByteStride // 4
+        if floats_per_vertex == 0:
+            return to_json(make_error(
+                f"Invalid vertex stride ({postvs.vertexByteStride} bytes), cannot parse vertex data",
+                "API_ERROR",
+            ))
         for i in range(num_verts):
             offset = i * postvs.vertexByteStride
             if offset + postvs.vertexByteStride > len(data):
@@ -597,7 +608,7 @@ def register(mcp: FastMCP):
             elif outputs and outputs != last_outputs:
                 new_pass = True
 
-            if new_pass and (is_clear or current_pass is None):
+            if new_pass:
                 # Start a new pass
                 if current_pass is not None:
                     passes.append(current_pass)
@@ -684,19 +695,42 @@ def _diff_dicts(d1: dict, d2: dict, path: str = "") -> dict:
 
 # ── Implication rules for diff_draw_calls ──
 # Each entry: (field_path_suffix, implication_template)
-_DIFF_IMPLICATIONS: list[tuple[str, str]] = [
-    ("blend.enabled",   "Blend toggle: {v1}→{v2}。{'透明度混合激活，颜色会与背景混合叠加' if v2 else '关闭 blend，输出将直接覆盖目标像素（不透明模式）'}"),
-    ("blend.color_src", "颜色源混合因子: {v1}→{v2}。可能导致输出颜色亮度/透明度变化"),
-    ("blend.color_dst", "颜色目标混合因子: {v1}→{v2}。影响背景色在最终结果中的权重"),
-    ("blend.color_op",  "颜色混合运算: {v1}→{v2}。运算方式改变可能导致颜色整体偏移"),
-    ("blend.alpha_src", "Alpha 源混合因子: {v1}→{v2}"),
-    ("depth.test",      "深度测试: {v1}→{v2}。{'关闭后物体可能穿透其他几何体' if not v2 else '开启后需要确保深度 buffer 正确初始化'}"),
-    ("depth.write",     "深度写入: {v1}→{v2}。{'关闭后该 draw call 不更新深度 buffer，适用于透明物体' if not v2 else '开启后会更新深度值'}"),
-    ("depth.func",      "深度比较函数: {v1}→{v2}。可能导致物体遮挡关系或消失问题"),
-    ("stencil.enabled", "模板测试: {v1}→{v2}"),
-    ("rasterizer.cull", "剔除模式: {v1}→{v2}。可能影响背面/正面可见性，倒影 pass 通常需要反转 cull"),
-    ("rasterizer.front_ccw", "正面朝向: {v1}→{v2}。CCW/CW 切换后背面剔除方向翻转"),
-    ("topology",        "图元拓扑: {v1}→{v2}"),
+def _implication_for(suffix: str, v1, v2) -> str | None:
+    """Return a human-readable implication string for a known diff field."""
+    s1, s2 = str(v1), str(v2)
+    if suffix == "blend.enabled":
+        detail = "透明度混合激活，颜色会与背景混合叠加" if v2 else "关闭 blend，输出将直接覆盖目标像素（不透明模式）"
+        return f"Blend toggle: {s1}→{s2}。{detail}"
+    if suffix == "blend.color_src":
+        return f"颜色源混合因子: {s1}→{s2}。可能导致输出颜色亮度/透明度变化"
+    if suffix == "blend.color_dst":
+        return f"颜色目标混合因子: {s1}→{s2}。影响背景色在最终结果中的权重"
+    if suffix == "blend.color_op":
+        return f"颜色混合运算: {s1}→{s2}。运算方式改变可能导致颜色整体偏移"
+    if suffix == "blend.alpha_src":
+        return f"Alpha 源混合因子: {s1}→{s2}"
+    if suffix == "depth.test":
+        detail = "关闭后物体可能穿透其他几何体" if not v2 else "开启后需要确保深度 buffer 正确初始化"
+        return f"深度测试: {s1}→{s2}。{detail}"
+    if suffix == "depth.write":
+        detail = "关闭后该 draw call 不更新深度 buffer，适用于透明物体" if not v2 else "开启后会更新深度值"
+        return f"深度写入: {s1}→{s2}。{detail}"
+    if suffix == "depth.func":
+        return f"深度比较函数: {s1}→{s2}。可能导致物体遮挡关系或消失问题"
+    if suffix == "stencil.enabled":
+        return f"模板测试: {s1}→{s2}"
+    if suffix == "rasterizer.cull":
+        return f"剔除模式: {s1}→{s2}。可能影响背面/正面可见性，倒影 pass 通常需要反转 cull"
+    if suffix == "rasterizer.front_ccw":
+        return f"正面朝向: {s1}→{s2}。CCW/CW 切换后背面剔除方向翻转"
+    if suffix == "topology":
+        return f"图元拓扑: {s1}→{s2}"
+    return None
+
+_IMPLICATION_SUFFIXES = [
+    "blend.enabled", "blend.color_src", "blend.color_dst", "blend.color_op",
+    "blend.alpha_src", "depth.test", "depth.write", "depth.func",
+    "stencil.enabled", "rasterizer.cull", "rasterizer.front_ccw", "topology",
 ]
 
 
@@ -712,16 +746,11 @@ def _add_implications(diff: dict) -> list[dict]:
                     v1 = val.get("eid1")
                     v2 = val.get("eid2")
                     entry: dict = {"field": key_path, "eid1": v1, "eid2": v2}
-                    # Try to find an implication
-                    for suffix, template in _DIFF_IMPLICATIONS:
+                    for suffix in _IMPLICATION_SUFFIXES:
                         if key_path.endswith(suffix):
-                            try:
-                                entry["implication"] = eval(
-                                    f'f"""{template}"""',
-                                    {"v1": v1, "v2": v2},
-                                )
-                            except Exception:
-                                entry["implication"] = template.replace("{v1}", str(v1)).replace("{v2}", str(v2))
+                            imp = _implication_for(suffix, v1, v2)
+                            if imp:
+                                entry["implication"] = imp
                             break
                     results.append(entry)
                 else:

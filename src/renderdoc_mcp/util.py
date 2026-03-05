@@ -326,9 +326,13 @@ def serialize_buffer_desc(buf) -> dict:
 
 def serialize_resource_desc(res) -> dict:
     """Serialize a ResourceDescription to a dict."""
+    try:
+        name = res.name if hasattr(res, "name") else str(res.resourceId)
+    except Exception:
+        name = str(res.resourceId)
     return {
         "resource_id": str(res.resourceId),
-        "name": res.name,
+        "name": name,
         "type": str(res.type),
     }
 

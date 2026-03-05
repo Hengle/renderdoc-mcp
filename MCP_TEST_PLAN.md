@@ -70,7 +70,7 @@
 | 21 | `list_textures` | min_width=512 | 过滤大纹理 | ✅ (108 textures) |
 | 22 | `list_buffers` | min_size=100000 | 过滤大 buffer | ✅ (23 buffers) |
 | 23 | `list_resources` | name_pattern=".*" | 列出所有命名资源 | ✅ (Bug 5 已修复验证, 成功返回完整资源列表) |
-| 24 | `get_resource_usage` | resource_id="ResourceId::4749" | 主 RT 的使用历史 | ⚠️ 功能正常 (155 usages), usage 值为原始数字 |
+| 24 | `get_resource_usage` | resource_id="ResourceId::4749" | 主 RT 的使用历史 | ✅ (155 usages, usage 已显示可读名称如 VS_RWResource) |
 
 ### 第五阶段：数据导出
 
@@ -99,12 +99,37 @@
 |---|------|----------|------|------|
 | 36 | `close_capture` | (无参数) | 关闭并释放资源 | ✅ (正常关闭, 后续调用返回 NO_CAPTURE_OPEN) |
 
+### 第八阶段：新工具验证 (P1/P2)
+
+| # | 工具 | 测试参数 | 预期 | 状态 |
+|---|------|----------|------|------|
+| 37 | `read_texture_pixels` | resource_id="ResourceId::4749", x=744, y=358, w=8, h=8, eid=3125 | 返回 8×8 像素 RGBA 网格 | ✅ (64 像素正常返回, 含蓝色天空区域值) |
+| 38 | `sample_pixel_region` | resource_id="ResourceId::4749", eid=3125, sample_count=256 | 批量采样 + 异常检测 | ✅ (253 samples, 0 异常, RGB mean: 0.41/0.42/0.67) |
+| 39 | `get_pass_timing` | granularity="pass", top_n=10 | 按 pass 分组 + 真实 GPU 计时 | ✅ (has_real_timing=true! 主 pass 855-3125 最耗时 0.021ms) |
+| 39b | `get_pass_timing` | granularity="draw_call", top_n=5 | top-5 最贵 draw | ✅ (EID 2155 最贵 0.002ms, 32K 顶点) |
+| 40 | `analyze_overdraw` | (无参数) | 帧级 overdraw 分析 | ✅ (主 RT 151 draws, main_resolution=1496x720 正确; Bug 6+改进 #7 修复后重启验证通过) |
+| 41 | `analyze_state_changes` | change_types=["shader","blend","depth","render_target"] | 状态切换统计+批次机会 | ✅ (shader 切换 114/200; 发现 EID 3017-3042 共 18 个可 instanced) |
+| 42 | `debug_shader_at_pixel` | event_id=3346, x=748, y=360 | shader trace 或 fallback | ✅ (ES 不支持 trace; fallback 返回像素值+shader 信息) |
+| 43 | `diagnose_reflection_mismatch` | (无参数, 自动检测) | 找不到反射 pass → 报告建议 | ✅ (NO_REFLECTION_PASS_FOUND, 建议使用 list_actions 查找) |
+| 44 | `diagnose_negative_values` | (无参数) | 扫描浮点 RT 负值 | ✅ (NO_ANOMALIES_FOUND, 无负值/NaN/Inf) |
+| 45 | `diagnose_mobile_risks` | check_categories=["performance","gpu_specific"] | 移动端风险评估 | ✅ (1 risk: 全屏 pass 7 次 clear, medium; device=OpenGLES) |
+| 46 | `diagnose_precision_issues` | (无参数) | 精度风险检查 | ✅ (5 issues: 2 medium D16 + 3 low D24 深度精度) |
+| 47 | `diagnose_mobile_risks` | (全类别) | 完整风险评估 | ✅ (3 risks: 2 high D16 精度 + 1 medium 全屏 pass) |
+| 48 | `analyze_bandwidth` | breakdown_by="pass" | 带宽估算 | ✅ (总带宽 ~1132 MB, 主 RT 637 MB, 含 tile 警告) |
+
 ## 测试汇总
 
-- **总计**: 36 项
-- **✅ 通过**: 34 项 (含 5 个 Bug 修复后验证通过)
-- **⚠️ 轻微问题**: 1 项 (#24 usage 值为原始数字, 非阻塞)
-- **⚠️ 已知限制**: 1 项 (#15 shader 反汇编, ES 版本限制)
+- **总计**: 48 项 (36 基础 + 12 新工具; #39 含 b 变体)
+- **✅ 通过**: 47 项 (含 6 个 Bug 修复后验证通过, Bug 6 + 改进 #7 重启后验证通过)
+- **⏳ 待验证**: 2 项 (#15 `disassemble_shader` + #42 `debug_shader_at_pixel`，需 Vulkan/D3D capture 文件)
+- **⚠️ 已知限制**: OpenGL ES 不支持 shader trace/反汇编，当前仅验证了 fallback 路径
+
+## 待验证项（需非 ES capture 文件）
+
+| # | 工具 | 说明 | 需要的 API |
+|---|------|------|-----------|
+| 15 | `disassemble_shader` | shader 反汇编，ES 下 SPIR-V 编译失败 | Vulkan / D3D11 / D3D12 |
+| 42 | `debug_shader_at_pixel` | 像素级 shader 调试追踪，ES 不支持 | Vulkan / D3D11 / D3D12 |
 
 ## 已发现并修复的 Bug
 
@@ -147,14 +172,26 @@
 - **影响文件**:
   - `resource_tools.py` (行 86-90)
 
+### Bug 6: TextureDescription.name 属性不存在 (新发现)
+- **错误**: `'renderdoc.TextureDescription' object has no attribute 'name'`
+- **原因**: `GetTextures()` 返回的 `TextureDescription` 对象没有 `.name` 属性（与 `ResourceDescription.name` 不同）
+- **注意**: `serialize_texture_desc()` 已用 `hasattr` 保护，`data_tools.py:236` 也有保护；但新工具中直接访问
+- **修复**: `tex.name → getattr(tex, 'name', None)` 配合 `or fallback`
+- **影响文件**:
+  - `advanced_tools.py` (1 处: 行 176)
+  - `performance_tools.py` (1 处: 行 348)
+  - `diagnostic_tools.py` (8 处: 行 160, 292, 318, 326, 609, 615, 627, 703)
+- **状态**: ✅ 代码已修复，重启后验证通过
+
 ## 待改进项 (非 Bug)
 
-1. **get_resource_usage**: `usage` 字段显示原始枚举数值 (如 `"32"`, `"35"`)，应转换为可读名称
-2. **get_shader_reflection**: `var_type` 和 `system_value` 字段显示 `"0"`, `"1"` 等数值，应转换为枚举名
+1. ~~**get_resource_usage**: `usage` 字段显示原始枚举数值~~ → ✅ 已修复 (ISSUES #10 枚举映射, 现显示 VS_RWResource 等)
+2. ~~**get_shader_reflection**: `var_type`/`system_value` 显示数值~~ → ✅ 已修复 (ISSUES #10)
 3. ~~**get_shader_bindings**: PS _DissolveMap 纹理绑定读取失败~~ → ✅ 已修复 (Bug 2 连锁影响)
 4. **pick_pixel**: `rgba_uint` 返回的是 float 的原始内存表示而非 uint8 值
 5. ~~**export_draw_textures**: EID 1014 导出 0 纹理~~ → ✅ 已修复 (Bug 2 连锁影响, 现可导出 6 纹理)
 6. **get_texture_stats**: 只返回 min/max，没有 avg/mean 统计
+7. ~~**analyze_overdraw**: `main_resolution` 取第一个 RT~~ → ✅ 已修复 (改为扫描所有 draw 找最大 RT, 重启后验证通过: main_resolution=1496x720)
 
 ## 环境限制
 

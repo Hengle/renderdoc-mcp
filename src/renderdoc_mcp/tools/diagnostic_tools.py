@@ -108,7 +108,7 @@ def register(mcp: FastMCP):
         for tex in textures:
             fmt = str(tex.format.Name()).upper()
             is_float = any(t in fmt for t in ["FLOAT", "R16", "R32", "R11G11B10"])
-            is_rt = bool(tex.creationFlags & (1 << 1))  # ColorTarget flag
+            is_rt = bool(tex.creationFlags & getattr(rd.TextureCategory, "ColorTarget", 2))
             if not is_float:
                 continue
             rid_str = str(tex.resourceId)
@@ -157,7 +157,7 @@ def register(mcp: FastMCP):
 
             entry: dict = {
                 "resource_id": rid_str,
-                "name": tex.name or rid_str,
+                "name": getattr(tex, 'name', None) or rid_str,
                 "format": str(tex.format.Name()),
                 "size": f"{tex.width}x{tex.height}",
                 "negative_count": scan["negative_count"],
@@ -167,10 +167,9 @@ def register(mcp: FastMCP):
                 "negative_rate": f"{scan['negative_count'] / max(scan['total_samples'], 1) * 100:.1f}%",
             }
 
-            # Find first draw that introduces negatives (scan backward)
+            # Find first draw that introduces negatives (scan forward from start)
             first_intro: dict | None = None
-            start_idx = max(0, len(draws_to_rt) - trace_depth)
-            for eid in draws_to_rt[start_idx:]:
+            for eid in draws_to_rt[:trace_depth]:
                 err2 = session.set_event(eid)
                 if err2:
                     continue
@@ -289,7 +288,7 @@ def register(mcp: FastMCP):
                     issues.append({
                         "type": "format_limitation",
                         "severity": "high",
-                        "target": f"{tex.name or rid_str} ({fmt}) {tex.width}x{tex.height}",
+                        "target": f"{getattr(tex, 'name', None) or rid_str} ({fmt}) {tex.width}x{tex.height}",
                         "description": (
                             "R11G11B10_FLOAT 没有符号位，无法存储负值。"
                             "写入负值会被 clamp 到 0（Adreno）或产生未定义行为（Mali）。"
@@ -315,7 +314,7 @@ def register(mcp: FastMCP):
                     issues.append({
                         "type": "depth_precision",
                         "severity": "medium",
-                        "target": f"{dtex.name or str(dtex.resourceId)} (D16) {dtex.width}x{dtex.height}",
+                        "target": f"{getattr(dtex, 'name', None) or str(dtex.resourceId)} (D16) {dtex.width}x{dtex.height}",
                         "description": "D16 深度精度仅 16-bit，在远平面附近极易出现 z-fighting。",
                         "fix": "改用 D24_UNORM_S8_UINT 或更好的 D32_SFLOAT (reversed-Z)",
                     })
@@ -323,7 +322,7 @@ def register(mcp: FastMCP):
                     issues.append({
                         "type": "depth_precision",
                         "severity": "low",
-                        "target": f"{dtex.name or str(dtex.resourceId)} (D24) {dtex.width}x{dtex.height}",
+                        "target": f"{getattr(dtex, 'name', None) or str(dtex.resourceId)} (D24) {dtex.width}x{dtex.height}",
                         "description": "D24 深度 buffer 在远处精度降低。large far-plane 场景建议使用 reversed-Z + D32。",
                         "fix": "考虑 reversed-Z 技术或缩小 far plane，可将远处精度提升约 3 倍",
                     })
@@ -606,13 +605,13 @@ def register(mcp: FastMCP):
                         except Exception:
                             scan = {"negative_count": 0, "nan_count": 0}
 
-                        detail = f"{tex.name or rid_str} 使用 R11G11B10_FLOAT（无符号位），{len(writing_events)} 个 draw call 写入该 RT。"
+                        detail = f"{getattr(tex, 'name', None) or rid_str} 使用 R11G11B10_FLOAT（无符号位），{len(writing_events)} 个 draw call 写入该 RT。"
                         if scan.get("negative_count", 0) > 0:
                             detail += f" 已确认检测到 {scan['negative_count']} 个负值样本。"
                         risks.append({
                             "category": "precision",
                             "severity": "high",
-                            "title": f"R11G11B10_FLOAT 存储负值风险: {tex.name or rid_str}",
+                            "title": f"R11G11B10_FLOAT 存储负值风险: {getattr(tex, 'name', None) or rid_str}",
                             "detail": detail,
                             "fix": "在写入该 RT 前 clamp 输出到 [0, +inf]，或改用 R16G16B16A16_FLOAT",
                         })
@@ -624,7 +623,7 @@ def register(mcp: FastMCP):
                     risks.append({
                         "category": "precision",
                         "severity": "high",
-                        "title": f"D16 深度精度不足: {tex.name or str(tex.resourceId)}",
+                        "title": f"D16 深度精度不足: {getattr(tex, 'name', None) or str(tex.resourceId)}",
                         "detail": "16-bit 深度 buffer 精度极低，近远平面比例大时 z-fighting 明显",
                         "fix": "改用 D24_UNORM_S8_UINT 或 D32_SFLOAT + reversed-Z",
                     })
@@ -700,7 +699,7 @@ def register(mcp: FastMCP):
                     risks.append({
                         "category": "compatibility",
                         "severity": "medium",
-                        "title": f"超大纹理: {tex.name or str(tex.resourceId)} ({tex.width}x{tex.height})",
+                        "title": f"超大纹理: {getattr(tex, 'name', None) or str(tex.resourceId)} ({tex.width}x{tex.height})",
                         "detail": "部分移动设备最大纹理尺寸为 4096，超过此限制会导致渲染错误或黑图",
                         "fix": "降低纹理分辨率或使用纹理流加载",
                     })

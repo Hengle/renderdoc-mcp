@@ -516,8 +516,8 @@ def register(mcp: FastMCP):
                         depth_info["size"] = f"{dt_desc.width}x{dt_desc.height}"
                         depth_info["format"] = str(dt_desc.format.Name())
                     saved.append(depth_info)
-            except Exception:
-                pass
+            except Exception as exc:
+                saved.append({"type": "depth", "error": f"Failed to save depth: {exc}"})
 
         return to_json({"event_id": event_id, "saved": saved, "count": len(saved)})
 
@@ -582,6 +582,11 @@ def register(mcp: FastMCP):
         )
 
         floats_per_vertex = postvs.vertexByteStride // 4
+        if floats_per_vertex == 0:
+            return to_json(make_error(
+                f"Invalid vertex stride ({postvs.vertexByteStride} bytes), cannot parse mesh data",
+                "API_ERROR",
+            ))
 
         # Parse all vertices
         positions = []

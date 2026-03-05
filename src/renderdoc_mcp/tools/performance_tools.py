@@ -200,15 +200,18 @@ def register(mcp: FastMCP):
         if not draw_eids:
             return to_json(make_error("No draw calls found matching filter", "API_ERROR"))
 
-        # Determine viewport from first draw call's output
+        # Determine viewport from the largest render target across all draw calls
         main_w, main_h = 1, 1
-        first_action = session.action_map[draw_eids[0]]
-        for o in first_action.outputs:
-            if int(o) != 0:
-                td = session.get_texture_desc(str(o))
-                if td:
-                    main_w, main_h = td.width, td.height
-                    break
+        seen_rts: set[str] = set()
+        for eid in draw_eids:
+            action = session.action_map[eid]
+            for o in action.outputs:
+                rid_str = str(o)
+                if int(o) != 0 and rid_str not in seen_rts:
+                    seen_rts.add(rid_str)
+                    td = session.get_texture_desc(rid_str)
+                    if td and td.width * td.height > main_w * main_h:
+                        main_w, main_h = td.width, td.height
 
         rx = region.get("x", 0) if region else 0
         ry = region.get("y", 0) if region else 0
@@ -255,15 +258,20 @@ def register(mcp: FastMCP):
                 td = session.get_texture_desc(rid_str)
                 if td:
                     rt_name_parts.append(f"{td.width}x{td.height} {td.format.Name()}")
+            pixel_count = main_w * main_h
+            total_pixels_drawn = sum(
+                session.action_map[e].numIndices // 3 * 0.5 * pixel_count / max(pixel_count, 1)
+                for e in eids if e in session.action_map
+            ) if False else len(eids)  # fallback: use draw count as proxy
             overdraw_data.append({
                 "render_targets": list(rt_key),
                 "rt_summary": ", ".join(rt_name_parts) or "unknown",
                 "draw_count": len(eids),
-                "estimated_overdraw": round(len(eids) / max(1, len(sample_grid)), 2),
             })
         overdraw_data.sort(key=lambda d: -d["draw_count"])
 
-        # Simple global estimate
+        # Estimate: total draw calls across all RTs / number of RT groups
+        # This measures average draws-per-RT, a proxy for overdraw complexity
         avg_overdraw = total_draws / max(len(rt_draw_map), 1)
 
         severity = "low"
@@ -345,7 +353,7 @@ def register(mcp: FastMCP):
                     if td:
                         bpp = _bytes_per_pixel(str(td.format.Name()))
                         rt_stats[rid_str] = {
-                            "name": td.name or rid_str,
+                            "name": getattr(td, 'name', None) or rid_str,
                             "size": f"{td.width}x{td.height}",
                             "format": str(td.format.Name()),
                             "bytes_per_pixel": bpp,
