@@ -1,5 +1,18 @@
 # renderdoc-mcp
 
+<div align="center">
+
+<h2>⚠️ Disclaimer</h2>
+
+$\Large\color{#ff69b4}{\textsf{This is a personal }}$ $\Large\color{#ff69b4}{\mathtt{✨ vibe\text{-}coding ✨}}$ $\Large\color{#ff69b4}{\textsf{project —}}$
+$\Large\color{#ff69b4}{\textsf{built for fun, not for production use.}}$
+
+$\small\color{gray}{\textsf{I have no idea why this repo has so many stars...}}$
+
+<img src="assets/crying.gif" width="64" />
+
+</div>
+
 MCP server for [RenderDoc](https://renderdoc.org/) — let AI assistants analyze GPU frame captures (`.rdc` files) for graphics debugging and performance analysis.
 
 Built on the [Model Context Protocol](https://modelcontextprotocol.io/), works with Claude Desktop, Claude Code, and any MCP-compatible client.
